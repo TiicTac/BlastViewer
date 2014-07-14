@@ -22,6 +22,10 @@ use Bio::SearchIO::Writer::HTMLResultWriter;
 use DBI;
 use Bio::GMOD::Blast::Graph;
 use Bio::GMOD::Blast::Util;
+use Tk;
+use CGI;
+
+
 
 ## Change this variable to point to your own location and the name 
 ## for the configuration file
@@ -48,7 +52,7 @@ my $bd='drupal';
 my $serveur='localhost';
 my $identifiant='ubuntu';
 my $motdepasse='gmod';
-my $num_acces=$ARGV[0];
+
 
 if (!param('sequence') && !param('filename')) {
 
@@ -255,17 +259,14 @@ sub blastSearchBox {
 # This method displays the popup menu for the blast search databases
 # and search programs. You should update this method to include your
 # database names and search programs.
-
+#DAMIENGENESTE
 my $name;
 my $value;
 my $buffer;
-
-
-if (length ($ENV{'QUERY_STRING'}) > 0){
-       $buffer = $ENV{'QUERY_STRING'};
-       ($name, $value) = split(/=/, $buffer);
-        $value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;      
- }
+my @pairs;
+my $pair;
+my %tab=();
+my $residue;
 
 my $dbh = DBI->connect( "DBI:Pg:database=$bd;host=$serveur", 
     $identifiant, $motdepasse, { 
@@ -273,16 +274,67 @@ my $dbh = DBI->connect( "DBI:Pg:database=$bd;host=$serveur",
     }  
 ) or die "Connection impossible à la base de données $bd !\n $! \n $@\n$DBI::errstr";
 
+
+if (length ($ENV{'QUERY_STRING'}) > 0){    
+       $buffer = $ENV{'QUERY_STRING'};
+       # resend
+       if ($buffer =~ /&/ ){	  
+         @pairs = split(/&/, $buffer);
+           foreach $pair (@pairs){
+              ($name, $value) = split(/=/, $pair);
+              $value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
+	      $tab{$name}=$value;	      
+            }
+	 ($name,$value)=split(/\|/,$tab{locus});
+	 $tab{locus}=$value;
+
+	 if ($tab{confirm} eq "true"){
+	     my $sql="Insert into featureloc(feature_id,srcfeature_id,fmin,fmax) VALUES ($tab{feature_id},(select feature_id from feature where name='$tab{locus}'),$tab{debut}-1,$tab{end}-1)";
+	     my $prep = $dbh->prepare($sql) or die $dbh->errstr;
+	     my $url = "http://localhost/feature/saccharomyces/cerevisiae/oligo/Le%20last%20test";
+	     $prep->execute(); 
+	     $prep->finish();
+	     
+	 }
+
+
+
+	 
+	 
+print "<script type=\"text/javascript\">
+<!--
+
+var answer = confirm (\"Are you sure to confirm your choice $tab{locus} ? \")
+if (!answer){
+history.back();
+}else{        
+ window.location.search = jQuery.query.set('confirm', true);
+ window.location.reload();
+	
+}
+// -->
+</script> ";
+
+
+
+      } else {
+	  
+# get the feature_id
+   ($name, $value) = split(/=/, $buffer);
+   $value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
+ 
 #Requete to get residues
 my $prep = $dbh->prepare("SELECT residues FROM feature where feature_id= '$value'") or die $dbh->errstr;
 $prep->execute() or die "Echec requête\n"; 
-my $residue;
+
 while ( my $result = $prep->fetchrow_array()){
     $residue=$result;	
 }
 $prep->finish(); 
-
-
+         
+      }
+      
+}
 
 
 
