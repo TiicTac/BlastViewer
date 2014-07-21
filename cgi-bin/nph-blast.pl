@@ -18,18 +18,18 @@ use CGI qw/:all/;
 use CGI qw/:html -nph/;
 use CGI::Carp qw(fatalsToBrowser);
 use Bio::SearchIO;
-use Bio::SearchIO::Writer::HTMLResultWriter;
+use MyHTMLResultWriter;
 use DBI;
 use Bio::GMOD::Blast::Graph;
 use Bio::GMOD::Blast::Util;
-use Tk;
 use CGI;
+use File::Temp qw/tempfile/;
 
 
 
 ## Change this variable to point to your own location and the name 
 ## for the configuration file
-my $CONF_FILE = '/usr/lib/cgi-bin/Blast.conf';
+my $CONF_FILE = '/var/BlastViewer/conf/Blast.conf';
 
 ########################################################################
 select(stdout); 
@@ -48,10 +48,10 @@ my (@program, %programLabel, %programType, @db, %dbLabel, %dbType, @matrix);
 my ($blastBinDir, $blatBinDir, $blastOutputFile, %port, %host);
 
 my ($imageDir, $imageUrl);
-my $bd='drupal';
+my $bd='licebase';
 my $serveur='localhost';
-my $identifiant='ubuntu';
-my $motdepasse='gmod';
+my $identifiant='licebase';
+my $motdepasse='licebase';
 
 
 if (!param('sequence') && !param('filename')) {
@@ -120,6 +120,8 @@ sub checkArgsAndDoSearch {
 sub runBlast {
 ####################################################################
 
+     
+    my  ($fh, $tmpfile) = tempfile(UNLINK => 1);
     unless ($program =~ /^blat/i) {
 
 	if ($filtering) {
@@ -158,11 +160,13 @@ sub runBlast {
     }
     else {
        
-
+       
 	$program = $blastBinDir.$program;
-        $cmd = "$program -db $dataset -query $seqtmp  -out $blastOutputFile -perc_identity 80.0 -evalue 0.3 2>&1";
-   #	$cmd = "$program $dataset $seqtmp $options -cpus=2 -progress=20 >> $blastOutputFile 2>&1";
-
+        $cmd = "$program -db $dataset -query $seqtmp  -out $blastOutputFile  $options > $tmpfile  2>&1";
+ #	die $cmd;
+	
+   #	$cmd =" $program $dataset $seqtmp $options -cpus=2 -progress=20 >> $blastOutputFile 2>&1";
+   #    die "Erreur blast :$cmd";
     }
 
     my $err = system($cmd);
@@ -173,8 +177,10 @@ sub runBlast {
 
 	print '<pre>';
 
-	system("/usr/bin/cat $blastOutputFile");
-
+	while (<$fh>) {
+	    print;
+	}
+	close ($fh);
 	print '</pre>';
 
 	exit;
@@ -204,6 +210,7 @@ sub showResult {
 ####################################################################
 
     print p, hr;
+    my $q = new CGI;
 
     my $in = new Bio::SearchIO(-format=>'blast',
 			       -file=>$blastOutputFile,
@@ -212,8 +219,10 @@ sub showResult {
 
     my $result = $in->next_result;
   #  my $resultt = $result->next_hit;
-    my $writer = new Bio::SearchIO::Writer::HTMLResultWriter;
-
+#
+    
+    my $writer =  MyHTMLResultWriter->new($q->url_param('feature_id')); 
+   
     my $out = new Bio::SearchIO(-writer => $writer);
 
     
@@ -221,7 +230,7 @@ sub showResult {
 
     if ($@) {
 
-	print "error=$@",p;
+	die $@  # "<pre> error=$@</pre> ",p;
 
     }
 
@@ -266,8 +275,8 @@ my $buffer;
 my @pairs;
 my $pair;
 my %tab=();
-my $residue;
-
+my $residue="";
+my $q=CGI->new;
 my $dbh = DBI->connect( "DBI:Pg:database=$bd;host=$serveur", 
     $identifiant, $motdepasse, { 
 	RaiseError => 1,
@@ -275,68 +284,63 @@ my $dbh = DBI->connect( "DBI:Pg:database=$bd;host=$serveur",
 ) or die "Connection impossible à la base de données $bd !\n $! \n $@\n$DBI::errstr";
 
 
-if (length ($ENV{'QUERY_STRING'}) > 0){    
-       $buffer = $ENV{'QUERY_STRING'};
-       # resend
-       if ($buffer =~ /&/ ){	  
-         @pairs = split(/&/, $buffer);
-           foreach $pair (@pairs){
-              ($name, $value) = split(/=/, $pair);
-              $value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
-	      $tab{$name}=$value;	      
-            }
-	 ($name,$value)=split(/\|/,$tab{locus});
-	 $tab{locus}=$value;
+#Get residues or ask Y/N to confirm choice of storing
+if (defined($q->url_param('feature_id'))){
+if (!defined($q->url_param('start'))  && !defined($q->url_param('end')) && !defined($q->url_param('locus'))) {
 
-	 if ($tab{confirm} eq "true"){
-	     my $sql="Insert into featureloc(feature_id,srcfeature_id,fmin,fmax) VALUES ($tab{feature_id},(select feature_id from feature where name='$tab{locus}'),$tab{debut}-1,$tab{end}-1)";
-	     my $prep = $dbh->prepare($sql) or die $dbh->errstr;
-	     my $url = "http://localhost/feature/saccharomyces/cerevisiae/oligo/Le%20last%20test";
-	     $prep->execute(); 
-	     $prep->finish();
-	     
-	 }
-
-
-
-	 
-	 
-print "<script type=\"text/javascript\">
-<!--
-
-var answer = confirm (\"Are you sure to confirm your choice $tab{locus} ? \")
-if (!answer){
-history.back();
-}else{        
- window.location.search = jQuery.query.set('confirm', true);
- window.location.reload();
-	
-}
-// -->
-</script> ";
-
-
-
-      } else {
-	  
-# get the feature_id
-   ($name, $value) = split(/=/, $buffer);
-   $value =~ s/%([a-fA-F0-9][a-fA-F0-9])/pack("C", hex($1))/eg;
- 
 #Requete to get residues
-my $prep = $dbh->prepare("SELECT residues FROM feature where feature_id= '$value'") or die $dbh->errstr;
+my $prep = $dbh->prepare("SELECT residues FROM feature where feature_id=".$q->url_param('feature_id')."") or die $dbh->errstr;
 $prep->execute() or die "Echec requête\n"; 
 
 while ( my $result = $prep->fetchrow_array()){
     $residue=$result;	
 }
 $prep->finish(); 
-         
-      }
-      
 }
+else {
+	 if (defined($q->url_param('confirm'))){
+	     my $testsql="Select count(*) from featureloc where feature_id=".$q->url_param('feature_id')."";
+	     my $count = $dbh->selectrow_array($testsql);
+	     if ($count == 0) {
+		 my $sql="Insert into featureloc(feature_id,srcfeature_id,fmin,fmax) VALUES (".$q->url_param('feature_id').",(select feature_id from feature where name='".$q->url_param('locus')."'),".$q->url_param('start')."-1,".$q->url_param('end')."-1)";
+		 my $prep = $dbh->prepare($sql) or die $dbh->errstr;
+		 my $url = "http://192.168.56.101:8080";	      
+		 $prep->execute(); 
+		 $prep->finish();
+		 print '<script type="text/javascript">            
+	         window.location.replace("https://192.168.56.101:8080/");
+                </script> ';
+	     }
+	     else {
+		print ' <script type="text/javascript">
+		 alert("This feature has already a location. You have to modifie the location manually ");
+		 history.back();
+		 </script>';
+	     }
+	 }
+	 else{
 
+ 
+print '<script type="text/javascript">
+<!--
+var bla = window.location.href+"&confirm=true";
+;
+var answer = confirm ("Are you sure to confirm your choice Start= '.$q->url_param('start').' and End ='.$q->url_param('end').'  ? ")
+if (!answer){
+history.back();
+}else{        
+ 
+ window.location.replace(bla);
+	
+}
+// -->
+</script> ';
+ 
+	 }
 
+      }
+
+}
 
     return b("Query Comment (optional, will be added to output for your use):").br.
 	   textfield(-name=>'seqname',
@@ -384,6 +388,19 @@ sub blastSearchOptions {
 
     my $formatDefault = 'gapped';
 
+
+     ######## taskt 
+    my @task = ('blastn-short', 'megablast','dc-megablast','blastp-short');
+
+    my %taskLabel = ('blastn-short'=>'BLASTN program optimized for sequences shorter than 50 bases',
+		       'megablast'=>'Traditional megablast used to find very similar (e.g., intraspecies or closely related species) sequences',
+	                 'dc-megablast'=>'Discontiguous megablast used to find more distant (e.g., interspecies) sequences',
+	                  'blastp-short' =>'BLASTP optimized for queries shorter than 30 residues');
+
+    my $taskDefault = '';   
+
+    
+
     ######## cutoff score 
     my @cutoff = ('default', '30', '50', '70', '90', '110');
 
@@ -397,6 +414,10 @@ sub blastSearchOptions {
     }
 
     my $wordLengthDefault = 'default';
+    ######## Perc_ identity
+    my @percident = ('default','50','60','70','80','90','95');
+
+    my $P_ident_Default = 'default';
 
     ######## Expect threshold
     my @eValue = ('default', '0.0001', '0.01', '1', '10', '100', '1000');
@@ -419,23 +440,30 @@ sub blastSearchOptions {
 	     'BLAST documentation at NCBI.').p.
 	   table({-bgcolor=>$optionBg,
 		  -cellspacing=>0},
-		 Tr(th({-align=>'left'},
+		  Tr(th({-align=>'left'},
 		       'Output format :').
 		    td(popup_menu(-name=>'output',
 				  -values=>\@format,
 				  -default=>$formatDefault,
+				  -labels=>\%taskLabel)).
+		    td(br)).
+                     Tr(th({-align=>'left'},
+		       'Task :').
+		    td(popup_menu(-name=>'task',
+				  -values=>\@task,
+				  -default=>$taskDefault,
 				  -labels=>\%formatLabel)).
 		    td(br)).
-		 Tr(th({-align=>'left'},
-		       'Comparison Matrix :').
-		    td(popup_menu(-name=>'matrix',
-				  -values=>\@matrix)).
-		    td(br)).
+	#	    Tr(th({-align=>'left'},
+	##	       'Comparison Matrix :').
+	#	    td(popup_menu(-name=>'matrix',
+       #    				  -values=>\@matrix)).
+	#	    td(br)).
 		 Tr(th({-align=>'left'},
 		       'Cutoff Score (S value) :').
-		    td(popup_menu(-name=>'sthr',
-				  -values=>\@cutoff,
-				  -default=>\$cutoffDefault)).
+		    td(textfield(-name=>'sthr',
+				  
+				  -default=>0)).
 		    td(br)).
 		 Tr(th({-align=>'left'},
 		       'Word Length (W value) :').
@@ -444,22 +472,27 @@ sub blastSearchOptions {
 				  -default=>\$wordLengthDefault)).
 		    td('Default = 11 for BLASTN, 3 for all others')).
 		 Tr(th({-align=>'left'},
+		       '% Identity  :').
+		    td(textfield(-name=>'perc_ident',
+				  
+				  -default=>0)).
+		    td(br)).
+		 Tr(th({-align=>'left'},
 		       'Expect threshold (E threshold) :').
-		    td(popup_menu(-name=>'ethr',
-				  -values=>\@eValue,
-				  -default=>$eValueDefault)).
+		    td(textfield(-name=>'ethr',				  
+				  -default=>0)).
 		    td(br)).
+	#	 Tr(th({-align=>'left'},
+	#	       'Number of best alignments to show :').
+	#	    td(popup_menu(-name=>'showal',
+	#			  -values=>\@alignNum,
+	#			  -default=>$alignNumDefault)).
+	#	    td(br)).
 		 Tr(th({-align=>'left'},
-		       'Number of best alignments to show :').
-		    td(popup_menu(-name=>'showal',
-				  -values=>\@alignNum,
-				  -default=>$alignNumDefault)).
-		    td(br)).
-		 Tr(th({-align=>'left'},
-		       'Filter options :').
-		    td(radio_group(-name=>'filtop',
-			     -values=>['On', 'Off'])).
-		    td('DUST file for BLASTN, SEQ filter for all others')));
+		       'Others options :').
+		    td(textfield(-name=>'options_bis',
+			         -values=>"")).
+		    td('-options=value ')));
 
 #		 Tr(th({-align=>'left'},
 #		       'Sort output by :').
@@ -618,13 +651,29 @@ sub createTmpSeqFile {
 sub checkSeqLengthAndSvalue {
 ####################################################################
     
-    if (param('sthr') ne "default" && param('sthr') < 60 && 
-	length($sequence) > 100 ) {
+    if (param('sthr') !=0  && param('sthr') >length($sequence) ) {
 
-	print "The maximum sequence length for an S value less than 60 is ",
-	       b("100"),".", p,
-	       "Return to the form to adjust either the S value or ",
+	print "The Cutpff Score is higher than the  sequence length ", p,
+	       "Return to the form to adjust either the cutoff score value or ",
                " sequence.",p;
+    
+	print end_html;
+
+	exit;
+
+    }
+
+}
+
+####################################################################
+sub checkTextfield {
+####################################################################
+    
+    my $text  =$_[0];
+    if ($text=~ /;/  || $text=~/&/ ) {
+
+	print  "Error in some textfield  ", p,
+	"Return to the form to adjust it";
     
 	print end_html;
 
@@ -728,8 +777,14 @@ sub setOptions {
     
     return if ($program =~ /blat/i);
 
-    $options = &blastOptions($program, length($sequence));
-
+   # $options = &blastOptions($program, length($sequence));
+    $options="";
+    my @params=(param('sortop'),param('ethr'),param('sthr'),param('output'),param('wordlength'),param('perc_ident'),param('options_bis'));
+    foreach my $text( @params){
+    
+	&checkTextfield($text); 
+	
+    }
     if (param('sortop') && param('sortop') ne "pvalue") { 
 
 	$options .= " -sort_by_".param('sortop'); 
@@ -737,51 +792,42 @@ sub setOptions {
     }
     if (param('ethr') && param('ethr') ne "default") {
 
-	$options .= " E=".param('ethr');
+	$options .= " -evalue=".param('ethr');
 
     }
     if (param('sthr') && param('sthr') ne "default") {
 
-	$options .= " S=".param('sthr');
+	$options .= " -min_raw_gapped_score=".param('sthr')." ";
 
     }
-    $options .= " B=".param('showal')." V=".param('showal');
+ #   $options .= " B=".param('showal')." V=".param('showal');
 
-    if (param('output') ne "gapped") { $options .= " -nogap"; }
+    if (param('output') ne "gapped") { $options .= " -ungapped"; }
+    
+    if (param('task') ){ $options.="-task=\"".param('task')."\"";}
 
-    if ($program ne "blastn" && param('matrix') ne "BLOSUM62") { 
+ #   if ($program ne "blastn" && param('matrix') ne "BLOSUM62") { 
 
-	$options .= " -matrix=".param('matrix'); 
+#	$options .= " -matrix=".param('matrix'); 
 
-    }
+  #  }
 
     if (param('wordlength') ne "default") { 
 
-	$options .= " -W=".param('wordlength');
+	$options .= " -word_size=".param('wordlength');
+
+    }
+    if (param('perc_ident') ne "default") { 
+
+	$options .= " -perc_identity=".param('perc_ident');
 
     }
 
-    if (param('filtop') =~ /^on/i) {
+    if (param('options_bis') ne "") {
     
-	$filtering = 1;
- 
-	if ( $program ne "blastn" ) {
-
-	    $options .= " -filter=seg";
-
-	} 
-	else {
-		
-	    $options .= " -filter=dust";
-	
-	}
-	  
-    } 
-    else {
-    
-	$filtering = 0;
-
+	$options.=" ".param('options_bis')." ";
     }
+
 
 }
 
