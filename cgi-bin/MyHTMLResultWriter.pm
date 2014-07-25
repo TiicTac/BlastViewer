@@ -318,7 +318,7 @@ sub to_string {
 			      (defined $hsps[0] ? $hsps[0]->evalue : ' ')) 
 			    );
         my $dline = &{$self->hit_desc_line}($self, $hit, $result);
-	    $hspstr .= "<a name=\"$acc\">\n".
+	    $hspstr .= "<a name=\"$acc\_A\">\n".
 		sprintf("><b>%s</b> %s</br><dd>Length = %s</dd><p>\n\n", $url_align, 
 			$dline , &_numwithcommas($hit->length));
 	    my $ct = 0;

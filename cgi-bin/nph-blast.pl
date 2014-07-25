@@ -13,23 +13,49 @@
 # 
 ########################################################################
 use strict;
+use warnings;
+#use diagnostics;
 
 use CGI qw/:all/;
 use CGI qw/:html -nph/;
-use CGI::Carp qw(fatalsToBrowser);
+#use CGI::Carp qw(fatalsToBrowser);
 use Bio::SearchIO;
 use MyHTMLResultWriter;
 use DBI;
 use Bio::GMOD::Blast::Graph;
 use Bio::GMOD::Blast::Util;
-use CGI;
+use Bio::DB::Das::Chado;
 use File::Temp qw/tempfile/;
-
+use URI::Escape;
+use CGI::Session;
+use CGI::Cookie;
+use Net::SAML;
 
 
 ## Change this variable to point to your own location and the name 
 ## for the configuration file
-my $CONF_FILE = '/var/BlastViewer/conf/Blast.conf';
+my $CONF_FILE = '../conf/Blast.conf';
+### global variables
+
+
+my $url = url();
+my $idp = "";
+my $embedded = 0;
+my $cssurl = "";
+
+my $bd='licebase';
+my $serveur='localhost';
+my $identifiant='licebase';
+my $motdepasse='licebase';
+
+my $chadoDb = ""; 
+my $chadoDbHost = "";
+
+my $chadoDbUser = "";
+
+my $chadoDbPass = "";
+
+
 
 ########################################################################
 select(stdout); 
@@ -48,20 +74,80 @@ my (@program, %programLabel, %programType, @db, %dbLabel, %dbType, @matrix);
 my ($blastBinDir, $blatBinDir, $blastOutputFile, %port, %host);
 
 my ($imageDir, $imageUrl);
-my $bd='licebase';
-my $serveur='localhost';
-my $identifiant='licebase';
-my $motdepasse='licebase';
 
 
-if (!param('sequence') && !param('filename')) {
+my $needAuthSearchForm = 1;
+my $needAuthChado = 1;
+my ($sid, $username);
+
+&setVariables; ## read configuration
+die "no dbuser" unless $chadoDbUser;
+
+my $needAuthAll = defined $idp;
+
+
+### make a new CGI session and generate the cookie
+my $session = new CGI::Session();
+my $new_session = $session->is_new;
+my $q = $session->query();
+my $cookie = CGI::Cookie->new(-name=>$session->name, -value=>$session->id);
+#### store all control paramters in the session
+
+my @names = $q->param();
+warn join " ", @names;
+#warn "sequence: ".$q->param('sequence');
+## map all cgi parameters to session parameters
+map {$session->param($_, $q->param($_)) unless /^sequence$/} @names;
+#@names = $q->url_param();
+## map all cgi parameters to session parameters
+#map {$session->param($_, $q->url_param($_))} @names;
+
+#$session->param('feature_id', $q->url_param('feature_id'));
+#$session->param('embedded', $q->url_param('embedded'));
+
+
+
+
+
+if ($new_session) {
+    warn "new session, reloading\n";
+    print $q->redirect(-uri=>url(), -cookie=>$cookie); exit;
+} else {
+    warn "resuming session ", $session->id(),". featureid: ". $session->param('feature_id');
+
+}
+
+$embedded = $session->param('embedded');
+
+
+
+
+
+if (! $q->param('sequence')) {
+    warn "printing search form\n";
+   
+    if ($needAuthAll) {
+	($sid, $username) = &doSSO(); 
+	die unless $sid;
+	$session->param('samlid', $sid);
+    }
+
+    
 
     &printSearchForm;
 
 }
 else {
 
+    if ($needAuthAll && ! $session->param('samlid')) {
+	($sid, $username) = &doSSO(); 
+	die unless $sid;
+	$session->param('samlid', $sid);
+    }
+
     &checkArgsAndDoSearch;
+    $session->delete();
+    $session->flush();
 
 }
 
@@ -71,9 +157,11 @@ exit;
 sub printSearchForm {
 ####################################################################
 
+    &setVariables;
+
     &printStartPage;
 
-    &setVariables;
+    
 
     print &blastForm('#CCCCFF');
    
@@ -84,11 +172,12 @@ sub printSearchForm {
 ####################################################################
 sub checkArgsAndDoSearch {
 ####################################################################
+    &setVariables;
 
     &printStartPage;
 
     #####################################################
-    &setVariables;
+    
 
     &checkParameters;
 
@@ -183,6 +272,9 @@ sub runBlast {
 	close ($fh);
 	print '</pre>';
 
+	$session->delete();
+	$session->flush();
+	
 	exit;
 
     }
@@ -198,10 +290,9 @@ sub showGraph {
 	  Bio::GMOD::Blast::Graph->new(-outputfile=>$blastOutputFile,
 				       -dstDir=>$imageDir,
 				       -dstURL=>$imageUrl);
-			       
-
-    $graph->showGraph;
-
+   if (ref $graph) {
+       $graph->showGraph;
+   }
   
 }
 
@@ -215,22 +306,23 @@ sub showResult {
     my $in = new Bio::SearchIO(-format=>'blast',
 			       -file=>$blastOutputFile,
 			       -verbose=>0,
-			       -signif=>0.1);
+			       -signif=>1);
 
     my $result = $in->next_result;
-  #  my $resultt = $result->next_hit;
-#
-    
-    my $writer =  MyHTMLResultWriter->new($q->url_param('feature_id')); 
+    return unless $result->num_hits > 0;
+    my $writer =  MyHTMLResultWriter->new(_get_param('feature_id')); 
    
     my $out = new Bio::SearchIO(-writer => $writer);
 
     
     eval { $out->write_result($result); };
+    $session->delete();
+    $session->flush();
+
 
     if ($@) {
 
-	die $@  # "<pre> error=$@</pre> ",p;
+	#die $@  # "<pre> error=$@</pre> ",p;
 
     }
 
@@ -247,17 +339,21 @@ sub blastForm {
 
     $optionBg ||= 'white';
 
-    return table({-width=>600,
-		  -border=>0,
-		  -rules=>'none',
-		  -cellpadding=>0,
-		  -cellspacing=>0},
-		 Tr(td({-colspan=>2},
-		       start_multipart_form)).
-		 Tr(td({-colspan=>2},
-		       &blastSearchBox)).
-		 Tr(td({-colspan=>2},
-		       &blastSearchOptions($optionBg))));
+    return 
+
+	start_multipart_form(-action=>$url).
+	table({-width=>600,
+	       -border=>0,
+	       -rules=>'none',
+	       -cellpadding=>0,
+	       -cellspacing=>0},
+	      Tr(td({-colspan=>2},
+		 )).
+	      Tr(td({-colspan=>2},
+		    &blastSearchBox)).
+	      Tr(td({-colspan=>2},
+		    &blastSearchOptions($optionBg)))).
+		    end_multipart_form();
 
 
 }
@@ -277,39 +373,67 @@ my $pair;
 my %tab=();
 my $residue="";
 my $q=CGI->new;
-my $dbh = DBI->connect( "DBI:Pg:database=$bd;host=$serveur", 
-    $identifiant, $motdepasse, { 
+my $dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
+    $chadoDbUser, $chadoDbPass, { 
 	RaiseError => 1,
     }  
 ) or die "Connection impossible à la base de données $bd !\n $! \n $@\n$DBI::errstr";
 
+my $db  = Bio::DB::Das::Chado->new(
+    -dsn  => "DBI:Pg:database=$chadoDb;host=$chadoDbHost",
+    -user => $chadoDbUser,
+    -pass => $chadoDbPass,
+    -srcfeatureslice => 1,
+    -recursivMapping => 1,
+    -tripal => 1
+    );
 
+
+
+my $displayName;
+my $description;
+my $primaryTag;
 #Get residues or ask Y/N to confirm choice of storing
-if (defined($q->url_param('feature_id'))){
-if (!defined($q->url_param('start'))  && !defined($q->url_param('end')) && !defined($q->url_param('locus'))) {
+if (defined(my $id = _get_param('feature_id'))){
+if (!defined(_get_param('start'))  && !defined(_get_param('end')) && !defined(_get_param('locus'))) {
 
+    my $feature = $db->get_feature_by_id($id);
+    #die ("feature $id not found") unless $feature;
+    if (ref $feature && ref $feature->seq()) {
+	$residue = $feature->seq()->seq 
+	    || die "missing sequence for feature ".$feature->display_name;
+	$displayName = $feature->display_name();
+	($description) =  $feature->get_tag_values('note');
+	$primaryTag = $feature->primary_tag();
+    } else {
 #Requete to get residues
-my $prep = $dbh->prepare("SELECT residues FROM feature where feature_id=".$q->url_param('feature_id')."") or die $dbh->errstr;
-$prep->execute() or die "Echec requête\n"; 
+	my $prep = $dbh->prepare("SELECT residues FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
+	$prep->execute() or die "Echec requête\n"; 
+	
+        my @ar = $prep->fetchrow_array();
+	$residue = $ar[0];
+	    
+    
+    $prep->finish();
+    
+    }
 
-while ( my $result = $prep->fetchrow_array()){
-    $residue=$result;	
-}
-$prep->finish(); 
+
+ 
 }
 else {
-	 if (defined($q->url_param('confirm'))){
-	     my $testsql="Select count(*) from featureloc where feature_id=".$q->url_param('feature_id')."";
+	 if (defined(_get_param('confirm'))){
+	     my $testsql="Select count(*) from featureloc where feature_id="._get_param('feature_id')."";
 	     my $count = $dbh->selectrow_array($testsql);
 	     if ($count == 0) {
-		 my $sql="Insert into featureloc(feature_id,srcfeature_id,fmin,fmax) VALUES (".$q->url_param('feature_id').",(select feature_id from feature where name='".$q->url_param('locus')."'),".$q->url_param('start')."-1,".$q->url_param('end')."-1)";
+		 my $sql="Insert into featureloc(feature_id,srcfeature_id,fmin,fmax) VALUES ("._get_param('feature_id').",(select feature_id from feature where name='"._get_param('locus')."'),"._get_param('start')."-1,"._get_param('end')."-1)";
 		 my $prep = $dbh->prepare($sql) or die $dbh->errstr;
-		 my $url = "http://192.168.56.101:8080";	      
+		 ;	      
 		 $prep->execute(); 
 		 $prep->finish();
-		 print '<script type="text/javascript">            
-	         window.location.replace("https://192.168.56.101:8080/");
-                </script> ';
+		 print qq| <script type="text/javascript">            
+	         window.location.replace("$url");
+                </script> |;
 	     }
 	     else {
 		print ' <script type="text/javascript">
@@ -325,7 +449,7 @@ print '<script type="text/javascript">
 <!--
 var bla = window.location.href+"&confirm=true";
 ;
-var answer = confirm ("Are you sure to confirm your choice Start= '.$q->url_param('start').' and End ='.$q->url_param('end').'  ? ")
+var answer = confirm ("Are you sure to confirm your choice Start= '._get_param('start').' and End ='._get_param('end').'  ? ")
 if (!answer){
 history.back();
 }else{        
@@ -343,7 +467,7 @@ history.back();
 }
 
     return b("Query Comment (optional, will be added to output for your use):").br.
-	   textfield(-name=>'seqname',
+	   textfield(-name=>'seqname', -value=>join(" ", ($displayName, $primaryTag, $description)),
 		     -size=>60
 	             ).p."\n".
 	   b(font({-color=>'red'},
@@ -378,7 +502,7 @@ sub blastSearchOptions {
 
     my ($optionBg) = @_; 
 
-    my $ncbiBlastHelp = 'http://www.ncbi.nlm.nih.gov/BLAST/blast_help.html';
+    my $ncbiBlastHelp = 'http://www.ncbi.nlm.nih.gov/books/NBK1763/';
 
     ######## output format 
     my @format = ('gapped', 'nongapped');
@@ -516,7 +640,7 @@ sub setVariables {
 	chomp;
 
 	my ($name, $value);
-
+	
 	if (/^([^\=]+) *= *(.+)$/) {
 
 	    $name = $1;
@@ -606,14 +730,33 @@ sub setVariables {
  
 	    $ENV{'BLASTFILTER'} = $value;
 
-	}
+	}elsif ($name =~ /^idp/i) {
+	    $idp =  uri_escape($value);
 
+       	}elsif ($name =~ /^chadoDb(\s)*$/i) {
+	
+	    $chadoDb = $value;
+
+	}
+	elsif ($name =~ /^chadodbhost/) {
+	    $chadoDbHost = $value;
+
+	}elsif ($name =~ /^chadoDbUser/i) {
+	    
+	    $chadoDbUser = $value;
+	}elsif ($name =~ /chadoDbPass/i) {
+	    $chadoDbPass = $value;
+	}elsif ($name =~ /cssurl/i) {
+	    $cssurl = $value;
+	} else {
+	   # warn " unknown configuration option $name ";
+	}
     }
-    close(CONF);
+    close(CONF) or die "error closing conf";
 
     ############ 
-    $program = param('program');
-    $dataset = param('database');    
+    $program = _get_param('program');
+    $dataset = _get_param('database');    
 
 }
 
@@ -639,7 +782,7 @@ sub checkParameters {
 sub createTmpSeqFile {
 ####################################################################
 
-    my $seqname = param('seqname');
+    my $seqname = _get_param('seqname');
 
     $seqname .= "  (Length: ".length($sequence).")";
 
@@ -651,7 +794,7 @@ sub createTmpSeqFile {
 sub checkSeqLengthAndSvalue {
 ####################################################################
     
-    if (param('sthr') !=0  && param('sthr') >length($sequence) ) {
+    if (_get_param('sthr') !=0  && _get_param('sthr') >length($sequence) ) {
 
 	print "The Cutpff Score is higher than the  sequence length ", p,
 	       "Return to the form to adjust either the cutoff score value or ",
@@ -687,8 +830,8 @@ sub checkTextfield {
 sub checkSeqLengthAndWordLength {
 ####################################################################
 
-    if ($program eq "blastn" && param('wordlength') ne "default" && 
-	param('wordlength') < 11 && length($sequence) > 10000) {
+    if ($program eq "blastn" && _get_param('wordlength') ne "default" && 
+	_get_param('wordlength') < 11 && length($sequence) > 10000) {
 
 	print "The maximum sequence length for a word length of less than 11 is ", b("10000"), ".", p,
 	      "Return to the form to adjust either the word length ",
@@ -752,14 +895,14 @@ sub checkProgramAndSeqlength {
 sub checkEmail {
 ####################################################################
     
-    if (!param('email')) { return; }
+    if (!_get_param('email')) { return; }
 
-    if (!Bio::GMOD::Blast::Util->validateEmail(param('email'))) {
+    if (!Bio::GMOD::Blast::Util->validateEmail(_get_param('email'))) {
 
 	print "You requested that the results be sent to your e-mail ",
 	      "account. However, your email address is missing, ",
 	      "appears incomplete, or does not contain a valid hostname.",p,
-	      "You entered this email address: ".b(param('email')),p,
+	      "You entered this email address: ".b(_get_param('email')),p,
 	      "Please return to the form and check that your email address ",
 	      "is correct.",p;
 
@@ -779,53 +922,53 @@ sub setOptions {
 
    # $options = &blastOptions($program, length($sequence));
     $options="";
-    my @params=(param('sortop'),param('ethr'),param('sthr'),param('output'),param('wordlength'),param('perc_ident'),param('options_bis'));
+    my @params=(_get_param('sortop'),_get_param('ethr'),_get_param('sthr'),_get_param('output'),_get_param('wordlength'),_get_param('perc_ident'),_get_param('options_bis'));
     foreach my $text( @params){
     
 	&checkTextfield($text); 
 	
     }
-    if (param('sortop') && param('sortop') ne "pvalue") { 
+    if (_get_param('sortop') && _get_param('sortop') ne "pvalue") { 
 
-	$options .= " -sort_by_".param('sortop'); 
-
-    }
-    if (param('ethr') && param('ethr') ne "default") {
-
-	$options .= " -evalue=".param('ethr');
+	$options .= " -sort_by_"._get_param('sortop'); 
 
     }
-    if (param('sthr') && param('sthr') ne "default") {
+    if (_get_param('ethr') && _get_param('ethr') ne "default") {
 
-	$options .= " -min_raw_gapped_score=".param('sthr')." ";
+	$options .= " -evalue="._get_param('ethr');
 
     }
- #   $options .= " B=".param('showal')." V=".param('showal');
+    if (_get_param('sthr') && _get_param('sthr') ne "default") {
 
-    if (param('output') ne "gapped") { $options .= " -ungapped"; }
+	$options .= " -min_raw_gapped_score="._get_param('sthr')." ";
+
+    }
+ #   $options .= " B="._get_param('showal')." V="._get_param('showal');
+
+    if (_get_param('output') ne "gapped") { $options .= " -ungapped"; }
     
-    if (param('task') ){ $options.="-task=\"".param('task')."\"";}
+    if (_get_param('task') ){ $options.="-task=\""._get_param('task')."\"";}
 
- #   if ($program ne "blastn" && param('matrix') ne "BLOSUM62") { 
+ #   if ($program ne "blastn" && _get_param('matrix') ne "BLOSUM62") { 
 
-#	$options .= " -matrix=".param('matrix'); 
+#	$options .= " -matrix="._get_param('matrix'); 
 
   #  }
 
-    if (param('wordlength') ne "default") { 
+    if (_get_param('wordlength') ne "default") { 
 
-	$options .= " -word_size=".param('wordlength');
-
-    }
-    if (param('perc_ident') ne "default") { 
-
-	$options .= " -perc_identity=".param('perc_ident');
+	$options .= " -word_size="._get_param('wordlength');
 
     }
+    if (_get_param('perc_ident') ne "default") { 
 
-    if (param('options_bis') ne "") {
+	$options .= " -perc_identity="._get_param('perc_ident');
+
+    }
+
+    if (_get_param('options_bis') ne "") {
     
-	$options.=" ".param('options_bis')." ";
+	$options.=" "._get_param('options_bis')." ";
     }
 
 
@@ -882,7 +1025,7 @@ sub blastOptions {
 sub checkDatabase {
 ####################################################################
     
-    if (param('database') eq '-') {
+    if (_get_param('database') eq '-') {
 
 	print b("No Database Selected."),p;
 
@@ -894,11 +1037,11 @@ sub checkDatabase {
 
     }
 
-    my $datasetLockFile = $datasetDir.param('database').".update";
+    my $datasetLockFile = $datasetDir._get_param('database').".update";
 
     if (-e "$datasetLockFile") {
 
-	print b("SORRY the ".param('database')." dataset is currently being UPDATED. Please try again in a few minutes or select another dataset."),p;
+	print b("SORRY the "._get_param('database')." dataset is currently being UPDATED. Please try again in a few minutes or select another dataset."),p;
 	
 	print end_html;
 
@@ -944,13 +1087,29 @@ sub checkSequence {
 sub printStartPage {
 ####################################################################
    
-    print header;
+    #print header;
 
-    print start_html(-title=>$title);
+ 
+    print start_html(-title=>$title, -style=>{'src'=>$cssurl});
 
-    print center(h2($title)), hr;
 
-    if (param('program') =~ /^(blat|tblatn)$/i) {
+    unless ($embedded) {
+	print center(h2($title)), hr;
+       
+	if ($sid) {
+	    ## we are logged in!
+	    my $conf = "PATH=/var/zxid/&URL=$url";
+	    my $cf = Net::SAML::new_conf_to_cf($conf);
+	    print p("Welcome: $username, you are logged in.");
+	    print p(Net::SAML::fed_mgmt_cf($cf, undef, -1, $sid, 0x1900));
+	}
+	
+    }
+
+    
+
+
+    if (_get_param('program') =~ /^(blat|tblatn)$/i) {
 
  	print center('If there are no hits found using BLAT/TBLATN'.br.'the remainder of this page will be blank.'), hr({-width=>'20%'});
 
@@ -961,11 +1120,57 @@ sub printStartPage {
 }
 
 ####################################################################
+sub doSSO {
+####################################################################
+    require Net::SAML;
+
+
+
+
+    my $conf = "PATH=/var/zxid/&URL=$url";
+    my $cf = Net::SAML::new_conf_to_cf($conf);
+    my $qs = $ENV{'QUERY_STRING'};
+    my $q = new CGI;
+
+    if ($qs =~ /o=P/) {
+	$qs = $q->query_string();
+    } else {     		
+	$qs .= "&e=$idp&l0=TRUE"
+	    unless ($qs =~ /s=|(SAMLart=)|o=B/);
+    };
+    my $res = Net::SAML::simple_cf($cf, -1, $qs, undef, 0x1828); # keep the flags 0x1828 !!! 
+    my ($redirecturl) = $res =~ /^Location:\s+(.+)/;
+    $redirecturl =~ s/\r|\n|\s//g;
+    print STDERR "RESULT: $res\n,$redirecturl\n";
+    my $op = substr($res, 0, 1);
+    if ($op eq 'L') { die "$res" unless $redirecturl;
+		      print ($q->redirect($redirecturl)); 
+		      exit } # LOCATION (Redir) or CONTENT
+    if ($op eq 'C') { print ($res); exit }
+    if ($op eq 'n') { exit; } # already handled
+    if ($op eq 'e') {die "cannot choose IDP"; exit; } # not logged in
+    if ($op ne 'd') { die "Unknown Net::SAML::simple() res($res)"; }
+    my ($sid) = $res =~ /^sesid: (.*)$/m;  # Extract a useful attribute from SSO output
+    die "invalid session id" unless $sid;
+    my ($username) =   $res =~ /^displayName: (.*)$/m ;
+
+    return ($sid, $username);
+}
+
+####################################################################
+sub renderLogOutButton {
+
+}
+####################################################################
+
+
+
+####################################################################
 # sub writeLog {
 ####################################################################
 #    my ($Cuser, $Csystem) = @_;
 
-#    if (param('email')) { return; }
+#    if (_get_param('email')) { return; }
  
 #    Bio::GMOD::Blast::Util->writeLog($program, $dataset, $options, 
 #                   $Cuser, $Csystem, length($sequence), $remoteLink);
@@ -974,6 +1179,12 @@ sub printStartPage {
 
 ####################################################################
 
+sub _get_param {
+    my $p = shift;
+    return unless $q || $session;
+    return ($q->param($p)|| ($session) ?  $session->param($p):undef);
+
+}
 
 
 
