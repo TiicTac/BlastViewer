@@ -16,9 +16,15 @@ use strict;
 use warnings;
 #use diagnostics;
 
-use CGI qw/:all/;
-use CGI qw/:html -nph/;
-#use CGI::Carp qw(fatalsToBrowser);
+########################################################################
+select(STDOUT); 
+$| = 1;  # to prevent buffering problems
+########################################################################
+
+use CGI;
+use CGI qw/:html :form -nph/;
+$CGI::POST_MAX=1024 * 100; #max 100k posts
+use CGI::Carp qw(fatalsToBrowser);
 use Bio::SearchIO;
 use MyHTMLResultWriter;
 use DBI;
@@ -27,7 +33,10 @@ use Bio::GMOD::Blast::Util;
 use Bio::DB::Das::Chado;
 use File::Temp qw/tempfile/;
 use URI::Escape;
-use CGI::Session;
+## Browser must have constant ip during session
+use CGI::Session '-ip_match';
+
+CGI::Session->name("BLAST-WEB-SESSION"); # set blast web session cookie name
 use CGI::Cookie;
 use Net::SAML;
 
@@ -38,15 +47,10 @@ my $CONF_FILE = '../conf/Blast.conf';
 ### global variables
 
 
-my $url = url();
+
 my $idp = "";
 my $embedded = 0;
 my $cssurl = "";
-
-my $bd='licebase';
-my $serveur='localhost';
-my $identifiant='licebase';
-my $motdepasse='licebase';
 
 my $chadoDb = ""; 
 my $chadoDbHost = "";
@@ -56,11 +60,6 @@ my $chadoDbUser = "";
 my $chadoDbPass = "";
 
 
-
-########################################################################
-select(stdout); 
-$| = 1;  # to prevent buffering problems
-########################################################################
 
 my $title = 'BLAST Search';
 
@@ -81,77 +80,87 @@ my $needAuthChado = 1;
 my ($sid, $username);
 
 &setVariables; ## read configuration
-die "no dbuser" unless $chadoDbUser;
+
 
 my $needAuthAll = defined $idp;
 
 
 ### make a new CGI session and generate the cookie
-my $session = new CGI::Session();
-my $new_session = $session->is_new;
+my $q = new CGI();
+my $url = $q->url();
+
+### discard old session if it's there
+my $s = CGI::Session->load("driver:db_file", $q) or die CGI::Session->errstr();
+if ( $s->is_expired ) {
+    print $s->header(),
+    $q->start_html(),
+    $q->p("Your session timed out! Refresh the screen to start new session!"),
+    $q->end_html();
+    exit(0);
+}
+
+my $session = new CGI::Session("driver:db_file", $q) or die CGI::Session->errstr();
+
 my $q = $session->query();
+## requests a fresh session:
+if ($q->param('o') =~ /C|Q|R/) {
+    warn "requesting fresh session";
+    $session->delete();
+    $session->flush();
+    $session = new CGI::Session("driver:db_file", $q);    
+}
+
+$session->expire('30m');
+
+my $new_session = $session->is_new;
 my $cookie = CGI::Cookie->new(-name=>$session->name, -value=>$session->id);
 #### store all control paramters in the session
 
 my @names = $q->param();
-warn join " ", @names;
-#warn "sequence: ".$q->param('sequence');
-## map all cgi parameters to session parameters
-map {$session->param($_, $q->param($_)) unless /^sequence$/} @names;
-#@names = $q->url_param();
-## map all cgi parameters to session parameters
-#map {$session->param($_, $q->url_param($_))} @names;
-
-#$session->param('feature_id', $q->url_param('feature_id'));
-#$session->param('embedded', $q->url_param('embedded'));
-
-
-
-
-
+## store all cgi parameters in session parameters, they wouldn't survive the
+## SSO process:
+$session->save_param($q);
 if ($new_session) {
+## make sure the user gets the cookie:
     warn "new session, reloading\n";
-    print $q->redirect(-uri=>url(), -cookie=>$cookie); exit;
+    print $q->redirect(-uri=>$q->url(), -cookie=>$cookie); exit;
 } else {
-    warn "resuming session ", $session->id(),". featureid: ". $session->param('feature_id');
-
+##   warn "resuming session ", $session->id(),". featureid: ". $session->param('feature_id');
 }
+
+($sid, $username) = &doSSO(); 
+### SSO killed our parameters, so load them again
+$session->load_param($q);
+#### ICICIC check for valid session, keep SAML and CGI sesssions synched
+
+$session->param('samlid', $sid);
+$session->param('username', $username);
 
 $embedded = $session->param('embedded');
 
-
-
-
-
-if (! $q->param('sequence')) {
-    warn "printing search form\n";
-   
-    if ($needAuthAll) {
-	($sid, $username) = &doSSO(); 
-	die unless $sid;
-	$session->param('samlid', $sid);
-    }
-
+if (_get_param('feature_id') && _get_param('start')  
+    && _get_param('end') && _get_param('locus') ) {
     
+    &writeCoordsToDb;
+
+    }
+    elsif (! $q->param('sequence') && (! $q->param('file'))) {
 
     &printSearchForm;
-
+   
 }
 else {
 
-    if ($needAuthAll && ! $session->param('samlid')) {
-	($sid, $username) = &doSSO(); 
-	die unless $sid;
-	$session->param('samlid', $sid);
-    }
-
     &checkArgsAndDoSearch;
-    $session->delete();
-    $session->flush();
+  
 
 }
+$session->flush(); 
+exit(0);
 
-exit;
+
+
+
 
 ####################################################################
 sub printSearchForm {
@@ -168,6 +177,107 @@ sub printSearchForm {
     print end_html;
 
 }
+
+
+sub writeCoordsToDb {
+
+### do not do anything, unless we have a valid session with a session id:
+    unless ($session && ! $session->is_expired && $session->param('samlid') == $sid) {
+	warn "attempt to write coords with invalid session\n";
+	exit(0);
+    }
+### we need a valid DB connection first:
+  
+    my $dbh;
+    if ($chadoDb) {
+	$dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
+			     $chadoDbUser, $chadoDbPass, { 
+				 RaiseError => 1,
+			     }  
+	    ) or die "Unable to connect to the chado DB: $chadoDb !\n $! \n $@\n$DBI::errstr";
+	
+    } else {
+	warn "chadoDb is required for db updates, please define it in the config file!\n";
+	exit (0);
+    };
+    
+### yes, do it, user issued a confirm!
+    if (_get_param('confirm') eq 'true'){
+	my $testsql="Select count(*) from featureloc where feature_id="._get_param('feature_id')."";
+	my $count = $dbh->selectrow_array($testsql);
+	if ($count == 0) {
+	    my $sql=
+		"INSERT into chado.featureloc(feature_id, srcfeature_id, 
+                 fmin,fmax,strand) VALUES ("._get_param('feature_id').", 
+                 (SELECT feature_id from feature where name='"._get_param('locus')."'),"
+                 ._get_param('start')."-1,"._get_param('end')."-1, "._get_param('strand')."  )";
+	    my $prep = $dbh->prepare($sql) or die $dbh->errstr;
+	    	      
+	    $prep->execute(); 
+	    $prep->finish();
+
+	    $session->clear(['locus', 'start', 'end', 'confirm', 'strand']);
+	    print $session->header();
+	    print start_html();
+	    print qq| <script type="text/javascript">
+            alert("Location saved");
+	         window.location.replace("$url");
+                </script> |;
+	    print end_html();
+	}
+	else {
+	    print start_html();
+	    print ' <script type="text/javascript">
+		 alert("This feature has already a location. You have to modify the location manually ");
+		 window.location.replace("'.$url.'");
+		 </script>';
+	    $session->clear(['locus', 'start', 'end', 'confirm', 'strand']);
+	    print end_html();
+	}
+    }
+    ### ask user for confirmation in a dialogue
+    elsif (! _get_param('confirm')) {
+	
+	my $rul = $q->url();
+	print start_html();
+	print '<script type="text/javascript">
+<!--
+var confirmurl = "'.$rul.'?confirm=true";
+var returnurl = "'.$rul.'?confirm=nope";
+;
+var answer = confirm ("Are you sure you want to save these coordinates permanently in the database? This can only be done once. Source feature: ' 
+._get_param('locus') . ' start= '._get_param('start').', end = '._get_param('end').', strand = '._get_param('strand').
+' ");
+
+if (!answer){
+ window.location.replace(returnurl);
+}else{        
+ 
+ window.location.replace(confirmurl);
+	
+}
+// -->
+</script> ';
+	print end_html();
+ 
+    } else {
+	
+	### user wanted to break out, so delete the parameters
+	$session->clear(['locus', 'start', 'end', 'confirm']);
+	
+	print ($q->redirect(-uri=>$q->url(), -cookie=>$cookie));
+       
+    }
+    exit (0);
+}
+
+
+
+
+
+
+
+
 
 ####################################################################
 sub checkArgsAndDoSearch {
@@ -272,8 +382,8 @@ sub runBlast {
 	close ($fh);
 	print '</pre>';
 
-	$session->delete();
-	$session->flush();
+	#$session->delete();
+	#$session->flush();
 	
 	exit;
 
@@ -316,8 +426,8 @@ sub showResult {
 
     
     eval { $out->write_result($result); };
-    $session->delete();
-    $session->flush();
+    #$session->delete();
+    #$session->flush();
 
 
     if ($@) {
@@ -365,135 +475,93 @@ sub blastSearchBox {
 # and search programs. You should update this method to include your
 # database names and search programs.
 #DAMIENGENESTE
-my $name;
-my $value;
-my $buffer;
-my @pairs;
-my $pair;
-my %tab=();
-my $residue="";
-my $q=CGI->new;
-my $dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
-    $chadoDbUser, $chadoDbPass, { 
-	RaiseError => 1,
-    }  
-) or die "Connection impossible à la base de données $bd !\n $! \n $@\n$DBI::errstr";
-
-my $db  = Bio::DB::Das::Chado->new(
-    -dsn  => "DBI:Pg:database=$chadoDb;host=$chadoDbHost",
-    -user => $chadoDbUser,
-    -pass => $chadoDbPass,
-    -srcfeatureslice => 1,
-    -recursivMapping => 1,
-    -tripal => 1
-    );
-
-
-
-my $displayName;
-my $description;
-my $primaryTag;
-#Get residues or ask Y/N to confirm choice of storing
-if (defined(my $id = _get_param('feature_id'))){
-if (!defined(_get_param('start'))  && !defined(_get_param('end')) && !defined(_get_param('locus'))) {
-
-    my $feature = $db->get_feature_by_id($id);
-    #die ("feature $id not found") unless $feature;
-    if (ref $feature && ref $feature->seq()) {
-	$residue = $feature->seq()->seq 
-	    || die "missing sequence for feature ".$feature->display_name;
-	$displayName = $feature->display_name();
-	($description) =  $feature->get_tag_values('note');
-	$primaryTag = $feature->primary_tag();
-    } else {
-#Requete to get residues
-	my $prep = $dbh->prepare("SELECT residues FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
-	$prep->execute() or die "Echec requête\n"; 
+    my $name;
+    my $value;
+    my $buffer;
+    my @pairs;
+    my $pair;
+    my %tab=();
+    my $residue="";
+    my $db;
+    my $dbh;
+    if ($chadoDb) {
+	$dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
+			     $chadoDbUser, $chadoDbPass, { 
+				 RaiseError => 1,
+			     }  
+	    ) or die "Unable to connect to the chado DB: $chadoDb !\n $! \n $@\n$DBI::errstr";
 	
-        my @ar = $prep->fetchrow_array();
-	$residue = $ar[0];
-	    
-    
-    $prep->finish();
-    
+	$db  = Bio::DB::Das::Chado->new(
+	    -dsn  => "DBI:Pg:database=$chadoDb;host=$chadoDbHost",
+	    -user => $chadoDbUser,
+	    -pass => $chadoDbPass,
+	    -srcfeatureslice => 1,
+	    -recursivMapping => 1,
+	    -tripal => 1
+	    );
+    };
+
+
+    my $displayName;
+    my $description;
+    my $primaryTag;
+
+#Get residues an add automatic annotation to the query comment if available
+    if ($dbh && $db && (my $id = _get_param('feature_id'))){
+
+	    my $feature = $db->get_feature_by_id($id);
+	    #die ("feature $id not found") unless $feature;
+	    if (ref $feature && eval { ref $feature->seq() } ) {
+		$residue = $feature->seq()->seq 
+		    || die "missing sequence for feature ".$feature->display_name;
+		$displayName = $feature->display_name();
+		($description) =  $feature->get_tag_values('note');
+		$primaryTag = $feature->primary_tag();
+	    } else {
+#Requete to get residues
+		my $prep = $dbh->prepare("SELECT residues FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
+		$prep->execute() or die "Echec requête\n"; 
+		
+		my @ar = $prep->fetchrow_array();
+		$residue = $ar[0];
+		
+		
+		$prep->finish();
+		
+	    }  
     }
 
 
- 
-}
-else {
-	 if (defined(_get_param('confirm'))){
-	     my $testsql="Select count(*) from featureloc where feature_id="._get_param('feature_id')."";
-	     my $count = $dbh->selectrow_array($testsql);
-	     if ($count == 0) {
-		 my $sql="Insert into featureloc(feature_id,srcfeature_id,fmin,fmax) VALUES ("._get_param('feature_id').",(select feature_id from feature where name='"._get_param('locus')."'),"._get_param('start')."-1,"._get_param('end')."-1)";
-		 my $prep = $dbh->prepare($sql) or die $dbh->errstr;
-		 ;	      
-		 $prep->execute(); 
-		 $prep->finish();
-		 print qq| <script type="text/javascript">            
-	         window.location.replace("$url");
-                </script> |;
-	     }
-	     else {
-		print ' <script type="text/javascript">
-		 alert("This feature has already a location. You have to modifie the location manually ");
-		 history.back();
-		 </script>';
-	     }
-	 }
-	 else{
-
- 
-print '<script type="text/javascript">
-<!--
-var bla = window.location.href+"&confirm=true";
-;
-var answer = confirm ("Are you sure to confirm your choice Start= '._get_param('start').' and End ='._get_param('end').'  ? ")
-if (!answer){
-history.back();
-}else{        
- 
- window.location.replace(bla);
-	
-}
-// -->
-</script> ';
- 
-	 }
-
-      }
-
-}
 
     return b("Query Comment (optional, will be added to output for your use):").br.
-	   textfield(-name=>'seqname', -value=>join(" ", ($displayName, $primaryTag, $description)),
-		     -size=>60
-	             ).p."\n".
-	   b(font({-color=>'red'},
-		"NOTE: If the input sequence is less than 30 letters you should change the default Cutoff Score value to something less than 100 or you can miss matches.")).p.
-	    b("Upload Local TEXT File: FASTA, GCG, and RAW sequence formats are okay").br.
-	    "WORD Documents do not work unless saved as TEXT.".
-	    filefield(-name=>'filename',
-		      -size=>60,
-		      -accept=>"text/*").p."\n".
-	    b("Type or Paste a Query Sequence : (No Comments, Numbers Okay)").br."\n".
-	    textarea(-name=>'sequence',
-		     -columns=>'80',
-		     -rows=>'5',
-		     -value=>"\n$residue").p."\n".
-	    b("Choose the Appropriate Search Program:").br.
-	    popup_menu(-name=>'program',
-		       -values=>\@program,
-		       -labels=>\%programLabel).p."\n".
-	    b("Choose a Sequence Database:").br.
-	    popup_menu(-name=>'database',
-		       -values=>\@db,
-		       -labels=>\%dbLabel).br."\n".
-	    submit(-value=>'Run BLAST').' or '.reset();
+	textfield(-name=>'seqname', -value=>join(" ", ($displayName, $primaryTag, $description)),
+		  -size=>60
+	).p."\n".
+	b(font({-color=>'red'},
+	       "NOTE: If the input sequence is less than 30 letters you should change the default Cutoff Score value to something less than 100 or you can miss matches.")).p.
+	       b("Upload Local TEXT File: FASTA, GCG, and RAW sequence formats are okay").br.
+	       "WORD Documents do not work unless saved as TEXT.".
+	       filefield(-name=>'filename',
+			 -size=>60,
+			 -accept=>"text/*").p."\n".
+			 b("Type or Paste a Query Sequence : (No Comments, Numbers Okay)").br."\n".
+			 textarea(-name=>'sequence',
+				  -columns=>'80',
+				  -rows=>'5',
+				  -value=>"\n$residue").p."\n".
+				  b("Choose the Appropriate Search Program:").br.
+				  popup_menu(-name=>'program',
+					     -values=>\@program,
+					     -labels=>\%programLabel).p."\n".
+					     b("Choose a Sequence Database:").br.
+					     popup_menu(-name=>'database',
+							-values=>\@db,
+							-labels=>\%dbLabel).br."\n".
+							submit(-value=>'Run BLAST').' or '.reset();
 
 
 }
+
 
 ######################################################################
 sub blastSearchOptions {
@@ -1055,7 +1123,7 @@ sub checkDatabase {
 sub checkSequence {
 ####################################################################
 
-    my $filehandle = upload('filename');
+    my $filehandle = $q->upload('filename');
 
     if ($filehandle) {
 
@@ -1065,7 +1133,7 @@ sub checkSequence {
 	}
        
     }
-    else { $sequence = param('sequence'); }
+    else { $sequence = $q->param('sequence'); }
 
     Bio::GMOD::Blast::Util->deleteUnwantedCharFromSequence(\$sequence);
 
@@ -1100,8 +1168,15 @@ sub printStartPage {
 	    ## we are logged in!
 	    my $conf = "PATH=/var/zxid/&URL=$url";
 	    my $cf = Net::SAML::new_conf_to_cf($conf);
-	    print p("Welcome: $username, you are logged in.");
-	    print p(Net::SAML::fed_mgmt_cf($cf, undef, -1, $sid, 0x1900));
+	    
+	    my $ses = Net::SAML::fetch_ses($cf, $sid);
+	    my $cgi = Net::SAML::new_cgi($cf, $q->query_string());
+	    my $redir =  Net::SAML::sp_slo_redir($cf, $cgi ,$ses); 
+	    $redir =~ s/^Location: //;
+	    $redir =~ s/[\r|\n]//g;
+	    print p("Welcome: $username, you are logged in.",
+	    a({-href=>$redir}, "Logout") );
+	    #print p(Net::SAML::fed_mgmt_cf($cf, undef, -1, $sid, 0x1900));
 	}
 	
     }
@@ -1148,8 +1223,9 @@ sub doSSO {
 		      exit } # LOCATION (Redir) or CONTENT
     if ($op eq 'C') { print ($res); exit }
     if ($op eq 'n') { exit; } # already handled
-    if ($op eq 'e') {die "cannot choose IDP"; exit; } # not logged in
-    if ($op ne 'd') { die "Unknown Net::SAML::simple() res($res)"; }
+    if ($op eq 'e') { #die "cannot choose IDP"; exit;
+ } # not logged in
+    elsif ($op ne 'd') { die "Unknown Net::SAML::simple() res($res)"; }
     my ($sid) = $res =~ /^sesid: (.*)$/m;  # Extract a useful attribute from SSO output
     die "invalid session id" unless $sid;
     my ($username) =   $res =~ /^displayName: (.*)$/m ;
@@ -1182,7 +1258,7 @@ sub renderLogOutButton {
 sub _get_param {
     my $p = shift;
     return unless $q || $session;
-    return ($q->param($p)|| ($session) ?  $session->param($p):undef);
+    return ($q->param($p) || ($session) ?  $session->param($p) : undef);
 
 }
 

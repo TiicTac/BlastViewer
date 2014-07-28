@@ -3,6 +3,7 @@ package MyHTMLResultWriter;
 
 use base qw(Bio::SearchIO::Writer::HTMLResultWriter);
 
+use Carp qw /confess/;
 #
 # BioPerl module for Bio::SearchIO::Writer::HTMLResultWriter
 #
@@ -468,17 +469,17 @@ sub to_string {
 		#DAMIENGENESTE
                 if ($self->{'feature_id'} ){
 		# <input type='hidden' name='confirm' value='false'>
-		$hspstr.="<form name='input' action='' method='get'>                         
+		$hspstr.="<form name='input' action='?o=C' method='post'>                         
                         <input type='hidden' name='feature_id' value=".$self->{'feature_id'}.">
                         <input type='hidden' name='start' value=".$hsp->hit->start."> 
-                        <input type='hidden' name='end' value=".$hsp->hit->end.">
+                        <input type='hidden' name='end' value=".$hsp->hit->end." >
                         <input type='hidden' name='locus' value=".$hit->accession.">
-                       
-                        <input type='submit' value='Store Blast hit at localisation'>
+                        <input type='hidden' name='strand' value=".$hsp->hit->strand." >
+                        <input type='submit' value='Store Blast hit as localisation' >
                         </form>";
 		}
 		else{
-		    $hspstr.="\n \n";
+		    $hspstr.="\n";
 		}
 		$hspstr .= "</pre>\n";
 	    }
@@ -486,7 +487,8 @@ sub to_string {
 #	$hspstr .= "</pre>\n";
     }
 
-    $str .= "</table><p>\n".$hspstr;
+    $str .= "</table>".p($hspstr);
+
     my ($pav, $sav) = ($result->available_parameters, $result->available_statistics);
     if ($pav || $sav) {
         # make table of search statistics and end the web page
