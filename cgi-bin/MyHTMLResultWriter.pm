@@ -467,10 +467,10 @@ sub to_string {
 		   
 		}
 		#DAMIENGENESTE
-		$hspstr .= "</pre>\n";
+		$hspstr .= "</pre>\n".p(a({-href=>url."#pagetop"}, '^Top^'));
                 if ($self->{'feature_id'} ){
 		# <input type='hidden' name='confirm' value='false'>
-		$hspstr.= p(b("You can store the coordinates of this blast-hit in the database for ".$result->query_name.". This can only be done once, per feature."), 
+		$hspstr.= p("You can store the coordinates of this blast-hit in the database for ".strong($result->query_name).". This can only be done once, per feature.", 
 			"<form name='input' action='?o=C' method='post'>                         
                         <input type='hidden' name='feature_id' value=".$self->{'feature_id'}.">
                         <input type='hidden' name='start' value=".$hsp->hit->start."> 

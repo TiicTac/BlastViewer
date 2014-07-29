@@ -203,7 +203,7 @@ sub writeCoordsToDb {
     
 ### yes, do it, user issued a confirm!
     if (_get_param('confirm') eq 'true'){
-	my $testsql="Select count(*) from featureloc where feature_id="._get_param('feature_id')."";
+	my $testsql="SELECT COUNT(*) FROM featureloc where feature_id="._get_param('feature_id')."";
 	my $count = $dbh->selectrow_array($testsql);
 	if ($count == 0) {
 	    my $sql=
@@ -396,14 +396,21 @@ sub runBlast {
 sub showGraph {
 ####################################################################
 
-   my $graph = 
-	  Bio::GMOD::Blast::Graph->new(-outputfile=>$blastOutputFile,
-				       -dstDir=>$imageDir,
-				       -dstURL=>$imageUrl);
-   if (ref $graph) {
-       $graph->showGraph;
+   my $graph;
+ 
+   eval {
+       $graph = Bio::GMOD::Blast::Graph->new(-outputfile=>$blastOutputFile,
+					     -dstDir=>$imageDir,
+					     -dstURL=>$imageUrl);
+   ;
+       if (ref $graph) {
+	   $graph->showGraph;
+       }
+   };
+   if ($@) {
+       print p("error parsing blast output");
    }
-  
+   
 }
 
 ####################################################################
@@ -420,7 +427,29 @@ sub showResult {
 
     my $result = $in->next_result;
     return unless $result->num_hits > 0;
-    my $writer =  MyHTMLResultWriter->new(_get_param('feature_id')); 
+    ### check if the feature already has a feature_loc
+    ### then we do not display the buttons:
+    my $fid = undef;
+    my $dbh;
+    if ($chadoDb && _get_param('feature_id')) {
+	$dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
+			     $chadoDbUser, $chadoDbPass, { 
+				 RaiseError => 1,
+			     }  
+	    ) or die "Unable to connect to the chado DB: $chadoDb !\n $! \n $@\n$DBI::errstr";
+    
+	if ($dbh) {	
+	    my $testsql="SELECT COUNT(*) FROM featureloc where feature_id="._get_param('feature_id')."";
+	    my $count = $dbh->selectrow_array($testsql);
+	    if ($count == 0) {
+		$fid = _get_param('feature_id');
+	    } else {
+		$session->clear('feature_id');
+	    }
+	 }   
+    }
+    ### buttons will only be displayed if feature_id is provided
+    my $writer =  MyHTMLResultWriter->new($fid); 
    
     my $out = new Bio::SearchIO(-writer => $writer);
 
@@ -520,14 +549,18 @@ sub blastSearchBox {
 	    } else {
 #Requete to get residues
 		my $prep = $dbh->prepare("SELECT residues FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
-		$prep->execute() or die "Echec requête\n"; 
+		$prep->execute() or die "Query failed\n"; 
 		
 		my @ar = $prep->fetchrow_array();
 		$residue = $ar[0];
 		
 		
 		$prep->finish();
-		
+
+		my $prep = $dbh->prepare("SELECT name FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
+		$prep->execute() or die "Query failed\n"; 		
+		my @ar = $prep->fetchrow_array();
+		$displayName = $ar[0];		
 	    }  
     }
 
@@ -1159,10 +1192,10 @@ sub printStartPage {
 
  
     print start_html(-title=>$title, -style=>{'src'=>$cssurl});
-
+    print '<a name="pagetop" />';
 
     unless ($embedded) {
-	print center(h2($title)), hr;
+	print center(h2({-style=>"margin:20px"}, $title)), hr;
        
 	if ($sid) {
 	    ## we are logged in!
