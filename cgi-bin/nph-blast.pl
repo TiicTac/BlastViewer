@@ -35,7 +35,6 @@ use File::Temp qw/tempfile/;
 use URI::Escape;
 ## Browser must have constant ip during session
 use CGI::Session '-ip_match';
-
 CGI::Session->name("BLAST-WEB-SESSION"); # set blast web session cookie name
 use CGI::Cookie;
 use Net::SAML;
@@ -90,6 +89,7 @@ my $q = new CGI();
 my $url = $q->url();
 
 ### discard old session if it's there
+### we don't need to do this probably
 #my $s = CGI::Session->load("driver:db_file", $q) or die CGI::Session->errstr();
 #if ( $s->is_expired ) {
 #    print $s->header(),
@@ -144,10 +144,10 @@ if (_get_param('feature_id') && _get_param('start')
     &writeCoordsToDb;
 
     }
-    elsif (! $q->param('sequence') && (! $q->param('file'))) {
-
-    &printSearchForm;
-   
+elsif 
+    ($q->param('retry') || (! $q->param('sequence') && (! $q->param('file')))) {
+	$session->clear('retry'); # user wants to try with different params
+	&printSearchForm;   
 }
 else {
 
@@ -166,7 +166,7 @@ exit(0);
 sub printSearchForm {
 ####################################################################
 
-    &setVariables;
+    #&setVariables;
 
     &printStartPage;
 
@@ -286,8 +286,7 @@ sub checkArgsAndDoSearch {
 
     &printStartPage;
 
-    #####################################################
-    
+    #####################################################    
 
     &checkParameters;
 
@@ -299,6 +298,7 @@ sub checkArgsAndDoSearch {
     #####################################################
     &runBlast;
     
+    &showSearchNav;
     #####################################################
     &showGraph;
 
@@ -314,6 +314,20 @@ sub checkArgsAndDoSearch {
     print end_html;
 
 }
+
+sub showSearchNav {
+    print start_form({-action=>$url, -method=>'get', -style=>'margin:20px'}), 
+    qq| <button name="retry" type="submit" value="1">Retry search</button>
+ <button name="o" type="submit" value="C">New search</button>
+ | , end_form();
+
+#p(a({-href=>$url.'?retry=1'}, "Retry search"), "&nbsp;", 
+#	    a({-href=>$url.'?o=C'}, "New search"))
+    
+
+
+}
+
 
 ####################################################################
 sub runBlast {
@@ -408,7 +422,7 @@ sub showGraph {
        }
    };
    if ($@) {
-       print p("error parsing blast output");
+       print p("");
    }
    
 }
@@ -418,7 +432,7 @@ sub showResult {
 ####################################################################
 
     print p, hr;
-    my $q = new CGI;
+   # my $q = new CGI;
 
     my $in = new Bio::SearchIO(-format=>'blast',
 			       -file=>$blastOutputFile,
@@ -431,7 +445,7 @@ sub showResult {
     ### then we do not display the buttons:
     my $fid = undef;
     my $dbh;
-    if ($chadoDb && _get_param('feature_id')) {
+    if ($chadoDb && _get_param('feature_id') && ! $session->param('do_not_store_location', '1')) {
 	$dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
 			     $chadoDbUser, $chadoDbPass, { 
 				 RaiseError => 1,
@@ -444,7 +458,8 @@ sub showResult {
 	    if ($count == 0) {
 		$fid = _get_param('feature_id');
 	    } else {
-		$session->clear('feature_id');
+		$session->param('do_not_store_location', '1');
+		#$session->clear('feature_id'); # if we remove this we cant retry
 	    }
 	 }   
     }
@@ -510,7 +525,7 @@ sub blastSearchBox {
     my @pairs;
     my $pair;
     my %tab=();
-    my $residue="";
+    my $residue = ""; # store the residues
     my $db;
     my $dbh;
     if ($chadoDb) {
@@ -530,11 +545,11 @@ sub blastSearchBox {
 	    );
     };
 
-
+    my $seqName = '';
     my $displayName;
     my $description;
     my $primaryTag;
-
+    my $filename = '';
 #Get residues an add automatic annotation to the query comment if available
     if ($dbh && $db && (my $id = _get_param('feature_id'))){
 
@@ -544,7 +559,7 @@ sub blastSearchBox {
 		$residue = $feature->seq()->seq 
 		    || die "missing sequence for feature ".$feature->display_name;
 		$displayName = $feature->display_name();
-		($description) =  $feature->get_tag_values('note');
+		($description) = $feature->get_tag_values('note');
 		$primaryTag = $feature->primary_tag();
 	    } else {
 #Requete to get residues
@@ -553,29 +568,35 @@ sub blastSearchBox {
 		
 		my @ar = $prep->fetchrow_array();
 		$residue = $ar[0];
-		
-		
 		$prep->finish();
 
 		my $prep = $dbh->prepare("SELECT name FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
 		$prep->execute() or die "Query failed\n"; 		
 		my @ar = $prep->fetchrow_array();
 		$displayName = $ar[0];		
-	    }  
+	    }
+	    $seqName = join(" ", ($displayName, $primaryTag, $description));
+    } else {
+	### if we had a stored sequence and description, already, load it again:
+	$seqName = _get_param('seqname');
+	$residue = _get_param('sequence');
+	$filename = _get_param('filename');
+
     }
 
 
 
     return b("Query Comment (optional, will be added to output for your use):").br.
-	textfield(-name=>'seqname', -value=>join(" ", ($displayName, $primaryTag, $description)),
-		  -size=>60
-	).p."\n".
+	textfield(-name=>'seqname', -value=>$seqName,
+		  -size=>60)
+	.p()."\n".
 	b(font({-color=>'red'},
 	       "NOTE: If the input sequence is less than 30 letters you should change the default Cutoff Score value to something less than 100 or you can miss matches.")).p.
 	       b("Upload Local TEXT File: FASTA, GCG, and RAW sequence formats are okay").br.
 	       "WORD Documents do not work unless saved as TEXT.".
 	       filefield(-name=>'filename',
 			 -size=>60,
+			 -value=>$filename,
 			 -accept=>"text/*").p."\n".
 			 b("Type or Paste a Query Sequence : (No Comments, Numbers Okay)").br."\n".
 			 textarea(-name=>'sequence',
@@ -1192,7 +1213,7 @@ sub printStartPage {
 
  
     print start_html(-title=>$title, -style=>{'src'=>$cssurl});
-    print '<a name="pagetop" />';
+    print '<a name="pagetop"></a>';
 
     unless ($embedded) {
 	print center(h2({-style=>"margin:20px"}, $title)), hr;
@@ -1207,8 +1228,8 @@ sub printStartPage {
 	    my $redir =  Net::SAML::sp_slo_redir($cf, $cgi ,$ses); 
 	    $redir =~ s/^Location: //;
 	    $redir =~ s/[\r|\n]//g;
-	    print p("Welcome: $username, you are logged in.",
-	    a({-href=>$redir}, "Logout") );
+	    print p({-style=>"margin:20px"}, "Welcome: $username, you are logged in.",
+	    a({-href=>$redir}, "Logout")) ;
 	    #print p(Net::SAML::fed_mgmt_cf($cf, undef, -1, $sid, 0x1900));
 	}
 	
