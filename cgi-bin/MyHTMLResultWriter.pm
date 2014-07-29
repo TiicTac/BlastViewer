@@ -467,27 +467,29 @@ sub to_string {
 		   
 		}
 		#DAMIENGENESTE
+		$hspstr .= "</pre>\n";
                 if ($self->{'feature_id'} ){
 		# <input type='hidden' name='confirm' value='false'>
-		$hspstr.="<form name='input' action='?o=C' method='post'>                         
+		$hspstr.= p(b("You can store the coordinates of this blast-hit in the database for ".$result->query_name.". This can only be done once, per feature."), 
+			"<form name='input' action='?o=C' method='post'>                         
                         <input type='hidden' name='feature_id' value=".$self->{'feature_id'}.">
                         <input type='hidden' name='start' value=".$hsp->hit->start."> 
                         <input type='hidden' name='end' value=".$hsp->hit->end." >
                         <input type='hidden' name='locus' value=".$hit->accession.">
                         <input type='hidden' name='strand' value=".$hsp->hit->strand." >
                         <input type='submit' value='Store Blast hit as localisation' >
-                        </form>";
+                        </form> \n").p("&nbsp;");
 		}
 		else{
 		    $hspstr.="\n";
 		}
-		$hspstr .= "</pre>\n";
+	
 	    }
 	}
 #	$hspstr .= "</pre>\n";
     }
 
-    $str .= "</table>".p($hspstr);
+    $str .= "</table>".$hspstr;
 
     my ($pav, $sav) = ($result->available_parameters, $result->available_statistics);
     if ($pav || $sav) {
@@ -770,11 +772,11 @@ sub title {
 
 sub default_title {
     my ($result) = @_;
-
+    
     return sprintf(
-        qq{<CENTER><H1>RESULT for %s </H1></CENTER>},
+        qq{<center><h1 style="margin:20px">RESULT for %s </h1></center>},
 		    
-		    $result->algorithm());
+	$result->algorithm());
 }
 
 

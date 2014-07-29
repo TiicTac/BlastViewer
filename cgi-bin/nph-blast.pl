@@ -90,14 +90,14 @@ my $q = new CGI();
 my $url = $q->url();
 
 ### discard old session if it's there
-my $s = CGI::Session->load("driver:db_file", $q) or die CGI::Session->errstr();
-if ( $s->is_expired ) {
-    print $s->header(),
-    $q->start_html(),
-    $q->p("Your session timed out! Refresh the screen to start new session!"),
-    $q->end_html();
-    exit(0);
-}
+#my $s = CGI::Session->load("driver:db_file", $q) or die CGI::Session->errstr();
+#if ( $s->is_expired ) {
+#    print $s->header(),
+#    $q->start_html(),
+#    $q->p("Your session timed out! Refresh the screen to start new session!"),
+#    $q->end_html();
+#    exit(0);
+#}
 
 my $session = new CGI::Session("driver:db_file", $q) or die CGI::Session->errstr();
 
@@ -1155,7 +1155,7 @@ sub checkSequence {
 sub printStartPage {
 ####################################################################
    
-    #print header;
+    print $session->header;
 
  
     print start_html(-title=>$title, -style=>{'src'=>$cssurl});
