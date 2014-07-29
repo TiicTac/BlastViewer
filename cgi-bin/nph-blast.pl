@@ -615,14 +615,15 @@ sub blastSearchOptions {
 
 
      ######## taskt 
-    my @task = ('blastn-short', 'megablast','dc-megablast','blastp-short');
+    my @task = ('','blastn-short', 'megablast','dc-megablast','blastp-short');
 
-    my %taskLabel = ('blastn-short'=>'BLASTN program optimized for sequences shorter than 50 bases',
+    my %taskLabel = (''=>'',
+	             'blastn-short'=>'BLASTN program optimized for sequences shorter than 50 bases',
 		       'megablast'=>'Traditional megablast used to find very similar (e.g., intraspecies or closely related species) sequences',
 	                 'dc-megablast'=>'Discontiguous megablast used to find more distant (e.g., interspecies) sequences',
 	                  'blastp-short' =>'BLASTP optimized for queries shorter than 30 residues');
 
-    my $taskDefault = '';   
+    my $taskDefault = "";   
 
     
 
@@ -1048,7 +1049,7 @@ sub setOptions {
 
     if (_get_param('output') ne "gapped") { $options .= " -ungapped"; }
     
-    if (_get_param('task') ){ $options.="-task=\""._get_param('task')."\"";}
+    if (_get_param('task') ne "" ){ $options.="-task=\""._get_param('task')."\"";}
 
  #   if ($program ne "blastn" && _get_param('matrix') ne "BLOSUM62") { 
 
