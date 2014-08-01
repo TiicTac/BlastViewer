@@ -203,6 +203,8 @@ sub writeCoordsToDb {
     
 ### yes, do it, user issued a confirm!
     if (_get_param('confirm') eq 'true'){
+
+### DANGER SQL INJECTION
 	my $testsql="SELECT COUNT(*) FROM featureloc where feature_id="._get_param('feature_id')."";
 	my $count = $dbh->selectrow_array($testsql);
 	if ($count == 0) {
@@ -451,7 +453,8 @@ sub showResult {
 				 RaiseError => 1,
 			     }  
 	    ) or die "Unable to connect to the chado DB: $chadoDb !\n $! \n $@\n$DBI::errstr";
-    
+
+### DANGER SQL INJECTION:    
 	if ($dbh) {	
 	    my $testsql="SELECT COUNT(*) FROM featureloc where feature_id="._get_param('feature_id')."";
 	    my $count = $dbh->selectrow_array($testsql);
@@ -563,13 +566,15 @@ sub blastSearchBox {
 		$primaryTag = $feature->primary_tag();
 	    } else {
 #Requete to get residues
+
+### DANGER SQL INJECTION
 		my $prep = $dbh->prepare("SELECT residues FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
 		$prep->execute() or die "Query failed\n"; 
 		
 		my @ar = $prep->fetchrow_array();
 		$residue = $ar[0];
 		$prep->finish();
-
+### DANGER SQL INJECTION
 		my $prep = $dbh->prepare("SELECT name FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
 		$prep->execute() or die "Query failed\n"; 		
 		my @ar = $prep->fetchrow_array();
