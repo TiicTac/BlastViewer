@@ -265,6 +265,7 @@ sub writeCoordsToDb {
     elsif (! _get_param('confirm')) {
 	
 	my $rul = $q->url();
+	print $session->header();
 	print start_html();
 	print '<script type="text/javascript">
 <!--
