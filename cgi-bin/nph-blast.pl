@@ -192,7 +192,7 @@ sub writeCoordsToDb {
     if ($chadoDb) {
 	$dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
 			     $chadoDbUser, $chadoDbPass, { 
-				 RaiseError => 1,
+				 RaiseError => 1, AutoCommit => 1
 			     }  
 	    ) or die "Unable to connect to the chado DB: $chadoDb !\n $! \n $@\n$DBI::errstr";
 	
@@ -204,25 +204,49 @@ sub writeCoordsToDb {
 ### yes, do it, user issued a confirm!
     if (_get_param('confirm') eq 'true'){
 
-### DANGER SQL INJECTION
-	my $testsql="SELECT COUNT(*) FROM featureloc where feature_id="._get_param('feature_id')."";
-	my $count = $dbh->selectrow_array($testsql);
+### DANGER SQL INJECTION, solved:
+	$dbh->begin_work() or die "begin transaction failed";
+	my $testsql = "SELECT COUNT(*) FROM chado.featureloc WHERE feature_id = ?";
+	my $sth = $dbh->prepare ($testsql);
+	$sth->execute(_get_param('feature_id'));
+	my $count = $sth->fetchrow_array();
+	$sth = $dbh->prepare ("SELECT feature_id FROM chado.feature WHERE name LIKE ?");
+	$sth->execute(_get_param('locus'));
+	my $loc = $sth->fetchall_arrayref();
+	#die "source feature not found (@loc)". $dbh->quote(_get_param('locus')) unless $loc[0];
+	
 	if ($count == 0) {
-	    my $sql=
-		"INSERT into chado.featureloc(feature_id, srcfeature_id, 
-                 fmin,fmax,strand) VALUES ("._get_param('feature_id').", 
-                 (SELECT feature_id from feature where name='"._get_param('locus')."'),"
-                 ._get_param('start')."-1,"._get_param('end')."-1, "._get_param('strand')."  )";
-	    my $prep = $dbh->prepare($sql) or die $dbh->errstr;
-	    	      
-	    $prep->execute(); 
-	    $prep->finish();
-
+	    my $sql = 	"INSERT INTO chado.featureloc(
+                         feature_id, srcfeature_id, fmin, fmax, strand) 
+                         VALUES ( ? , 
+                         ?,
+                         ?, ?, ? )";
+	    my $sth = $dbh->prepare($sql);
+	    $sth -> execute(
+		(_get_param('feature_id')),
+		$loc->[0][0],
+		(_get_param('start') - 1),
+		(_get_param('end') - 1),
+		(_get_param('strand')),
+		);
+	    $sth->finish();
+	    $dbh->commit() or die "commit failed";
+	    
 	    $session->clear(['locus', 'start', 'end', 'confirm', 'strand']);
+	    
 	    print $session->header();
 	    print start_html();
+	    my $warning = "";
+	    if (@$loc == 0) {
+		$warning = "\n However, the source feature was not found in the data base. You have to edit the feature manually to enter the correct source feature.";
+	    } elsif (@$loc > 1) {
+		$warning = "\n Multiple source features with the same name were found, using the first one. You should check if that is correct.";
+	    }
+
+
+	    	
 	    print qq| <script type="text/javascript">
-            alert("Location saved");
+            alert("Location saved.$warning");
 	         window.location.replace("$url");
                 </script> |;
 	    print end_html();
@@ -447,22 +471,28 @@ sub showResult {
     ### then we do not display the buttons:
     my $fid = undef;
     my $dbh;
-    if ($chadoDb && _get_param('feature_id') && ! $session->param('do_not_store_location', '1')) {
+
+    if ($chadoDb && _get_param('feature_id') && ! $session->param('do_not_store_location') eq '1') {
 	$dbh = DBI->connect( "DBI:Pg:database=$chadoDb;host=$chadoDbHost", 
 			     $chadoDbUser, $chadoDbPass, { 
-				 RaiseError => 1,
+				 RaiseError => 1, AutoCommit =>1
 			     }  
 	    ) or die "Unable to connect to the chado DB: $chadoDb !\n $! \n $@\n$DBI::errstr";
-
-### DANGER SQL INJECTION:    
-	if ($dbh) {	
-	    my $testsql="SELECT COUNT(*) FROM featureloc where feature_id="._get_param('feature_id')."";
-	    my $count = $dbh->selectrow_array($testsql);
+	#warn "count: $dbh";
+### DANGER SQL INJECTION, solved:    
+	if ($dbh) {
+	    
+	    my $testsql = "SELECT COUNT(*) FROM chado.featureloc WHERE feature_id = ?";
+	    my $sth = $dbh->prepare($testsql);
+	    $sth->execute(_get_param('feature_id'));
+	    
+	    my $count = $sth->fetchrow_array();
+	    warn "count: '$count' for feature "._get_param('feature_id');
 	    if ($count == 0) {
 		$fid = _get_param('feature_id');
 	    } else {
 		$session->param('do_not_store_location', '1');
-		#$session->clear('feature_id'); # if we remove this we cant retry
+
 	    }
 	 }   
     }
@@ -567,17 +597,14 @@ sub blastSearchBox {
 	    } else {
 #Requete to get residues
 
-### DANGER SQL INJECTION
-		my $prep = $dbh->prepare("SELECT residues FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
-		$prep->execute() or die "Query failed\n"; 
-		
+### DANGER SQL INJECTION, solved
+		my $prep = $dbh->prepare("SELECT name, residues 
+FROM chado.feature where feature_id=?");
+		$prep->execute((_get_param('feature_id'))); 		
 		my @ar = $prep->fetchrow_array();
-		$residue = $ar[0];
 		$prep->finish();
-### DANGER SQL INJECTION
-		my $prep = $dbh->prepare("SELECT name FROM chado.feature where feature_id="._get_param('feature_id')."") or die $dbh->errstr;
-		$prep->execute() or die "Query failed\n"; 		
-		my @ar = $prep->fetchrow_array();
+
+		$residue = $ar[1];
 		$displayName = $ar[0];		
 	    }
 	    $seqName = join(" ", ($displayName, $primaryTag, $description));
