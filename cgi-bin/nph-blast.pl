@@ -1,4 +1,4 @@
-#!/usr/bin/perl
+#!/home/licebase/bin/perl
 ########################################################################
 # Script name  :    nph-blast.pl
 #
@@ -1116,7 +1116,7 @@ sub setOptions {
 	$options .= " -word_size="._get_param('wordlength');
 
     }
-    if (_get_param('perc_ident') ne "default") { 
+    if (_get_param('perc_ident') ne "default" && (uc $program eq "BLASTN")) { 
 
 	$options .= " -perc_identity="._get_param('perc_ident');
 
@@ -1254,7 +1254,7 @@ sub printStartPage {
        
 	if ($sid) {
 	    ## we are logged in!
-	    my $conf = "PATH=/var/zxid/&URL=$url";
+	    my $conf = "PATH=/home/licebase/zxid/var/zxid/&URL=$url";
 	    my $cf = Net::SAML::new_conf_to_cf($conf);
 	    
 	    my $ses = Net::SAML::fetch_ses($cf, $sid);
@@ -1290,7 +1290,7 @@ sub doSSO {
 
 
 
-    my $conf = "PATH=/var/zxid/&URL=$url";
+    my $conf = "PATH=/home/licebase/zxid/var/zxid/&URL=$url";
     my $cf = Net::SAML::new_conf_to_cf($conf);
     my $qs = $ENV{'QUERY_STRING'};
     my $q = new CGI;
