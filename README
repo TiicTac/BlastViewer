@@ -1,3 +1,22 @@
+This is a fork of the orginal BLAST Graphics Viewer used in LiceBase (licebase.org).
+We have attempted to update the code and fix issues where it was slightly broken or out of date.
+
+We have also changed and added some features:
+ 
+ - supports only Blast+ (not WU-blast) binaries and options (with task option)
+ - added support for SAML authentication and logins via Net::SAML module
+ - this change required to add full session management using CGI::Session
+ - changed the configuration file parser to Config::IniFiles to allow for more refined blast databases
+ - added our own HTML writer module because we need to be able to configure the output more
+ - added links to GBrowse from a Blast result
+ - added a mechanism that can connect to a CHADO backend to retrieve sequence files
+ - added a mechanism that can write a feature location entry derived from BLAST coordinates
+   to CHADO for sequences retrieve from CHADO
+   
+
+
+================================= Original README =============================================
+
 The BLAST Graphic Viewer provides a graphical visualization of the regions 
 contained within HSPs relative to the query sequence. This distribution 
 includes sample databases and a BLAST Search form. It is a component of 
