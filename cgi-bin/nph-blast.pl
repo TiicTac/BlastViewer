@@ -1127,6 +1127,12 @@ sub setOptions {
 	$options.=" "._get_param('options_bis')." ";
     }
 
+	if (lc (_get_param('database')) =~ /^(nr|nt)/) {
+		$options .= " -remote "; # overload NCBI server instead of ours...
+    } 
+
+
+
 
 }
 

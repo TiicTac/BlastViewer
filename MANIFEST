@@ -7,6 +7,7 @@ VERSION
 cgi-bin/nph-blast.pl
 conf/Blast.conf
 lib/Bio/GMOD/Blast/Graph.pm
+lib/MyHTMLResultWriter.pm
 lib/Bio/GMOD/Blast/Util.pm
 lib/Bio/GMOD/Blast/Graph/BaseObj.pm  
 lib/Bio/GMOD/Blast/Graph/Bucket.pm
