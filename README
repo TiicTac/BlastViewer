@@ -3,16 +3,32 @@ We have attempted to update the code and fix issues where it was slightly broken
 
 We have also changed and added some features:
  
- - supports only Blast+ (not WU-blast) binaries and options (with task option)
+ - supports only Blast+ (not WU-blast any more) binaries and options (with "Task" parameter)
  - added support for SAML authentication and logins via Net::SAML module
  - this change required to add full session management using CGI::Session
- - changed the configuration file parser to Config::IniFiles to allow for more refined blast databases
- - added our own HTML writer module because we need to be able to configure the output more
- - added links to GBrowse from a Blast result
+ - changed the configuration file parser to Config::IniFiles to allow for more refined blast database configuration, that also means the config files need to be changed, look at example.conf
+ - primary links can now be set in the configuration DB stanza
+ - GBrowse URLs can now be configured via the configuraton file for each database, they appear below the Blast HSP entry on the result page
+ - all URL parameters are now filtered through String::ShellQuote
+ - script remembers settings for sequence, program, Task, and blast db 
+ - these parameters can also be controlled by URL: nph-blast.pl?program=blastn&task=blastn-short 
+ - added our own HTML writer module because we need to be able to configure the output to enable these features
  - added a mechanism that can connect to a CHADO backend to retrieve sequence files
  - added a mechanism that can write a feature location entry derived from BLAST coordinates
    to CHADO for sequences retrieve from CHADO
-   
+ - script reads the local of the CSS file from the configuration
+ - script can be called with embedd=1 parameter, then the script will not display greetings, title, and login and logout information
+ - put the image generation in an eval
+ - 'fixed' anchor links between graphics and textual result, works now but only for Nucleotide sequences  
+
+TODOs:
+ - fix hyperlinks between graphics and textual result for non DNA
+ - the original 'synchroneous job handling' is naively implemented. 
+   * result page can time out
+   * no wait indicator
+   * no job management, easy to overload server
+   -> implement result page in Ajax with 'spinner'
+   -> integrate one/many proper queueing system, e.g. OGE via DRMAA
 
 
 ================================= Original README =============================================

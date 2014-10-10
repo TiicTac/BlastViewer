@@ -201,6 +201,16 @@ sub remote_database_url{
    return $self->{'remote_database_url'}->{$type};
 }
 
+sub remote_gbrowse_url{
+    my ($self, $value) = @_;
+
+    if( defined $value) {
+	$self->{'remote_gbrowse_url'} = $value;
+    }
+    return $self->{'remote_gbrowse_url'};
+    
+}
+
 =head2 to_string
 
  Purpose   : Produces data for each Search::Result::ResultI in a string.
@@ -466,9 +476,13 @@ sub to_string {
 		    $count += $AlignmentLineWidth;
 		   
 		}
-		#DAMIENGENESTE
+	
+;
+	#DAMIENGENESTE
 		$hspstr .= "</pre>\n".p(
-    a({-href=>"https://licebase.org/fgb2/gbrowse/lsalmonis/?ref=".$hit->accession.";start=".$hsp->hit->start.";end=".$hsp->hit->end, -target=>"_new"}, "Open region in GBrowse"), " | " ,
+   
+($self->remote_gbrowse_url()) ?  a{-href=>$self->remote_gbrowse_url()."?ref=".$hit->accession.";start=".$hsp->hit->start.";end=".$hsp->hit->end, -target=>"_new"},
+			     "Open region in GBrowse" . " | "  : ' ' ,
 	a({-href=>url."#pagetop"}, '^Top^'));
 
 

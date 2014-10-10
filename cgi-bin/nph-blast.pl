@@ -1,4 +1,4 @@
-#!/home/licebase/bin/perl
+#!/usr/bin/env perl
 ########################################################################
 # Script name  :    nph-blast.pl
 #
@@ -14,6 +14,7 @@
 ########################################################################
 use strict;
 use warnings;
+use lib "../lib";
 #use diagnostics;
 
 ########################################################################
@@ -38,6 +39,8 @@ use CGI::Session '-ip_match';
 CGI::Session->name("BLAST-WEB-SESSION"); # set blast web session cookie name
 use CGI::Cookie;
 use Net::SAML;
+use Config::IniFiles;
+use String::ShellQuote; 
 
 
 ## Change this variable to point to your own location and the name 
@@ -67,7 +70,7 @@ my $title = 'BLAST Search';
 my ($datasetDir, $seqtmp, $sequence, $program, $dataset, $options, 
     $filtering);
 
-my (@program, %programLabel, %programType, @db, %dbLabel, %dbType, @matrix);
+my (@program, %programLabel, %programType, @db, %dbLabel, %dbType, %dbPrimaryURL, %dbGbrowseURL, @matrix);
 
 my ($blastBinDir, $blatBinDir, $blastOutputFile, %port, %host);
 
@@ -81,7 +84,7 @@ my ($sid, $username);
 &setVariables; ## read configuration
 
 
-my $needAuthAll = defined $idp;
+#my $needAuthAll = defined $idp;
 
 
 ### make a new CGI session and generate the cookie
@@ -101,9 +104,9 @@ my $url = $q->url();
 
 my $session = new CGI::Session("driver:db_file", $q) or die CGI::Session->errstr();
 
-my $q = $session->query();
+$q = $session->query();
 ## requests a fresh session:
-if ($q->param('o') =~ /C|Q|R/) {
+if ($q->param('o') && $q->param('o') =~ /C|Q|R/) {
     warn "requesting fresh session";
     $session->delete();
     $session->flush();
@@ -122,19 +125,21 @@ my @names = $q->param();
 $session->save_param($q);
 if ($new_session) {
 ## make sure the user gets the cookie:
-    warn "new session, reloading\n";
+    #warn "new session, reloading\n";
     print $q->redirect(-uri=>$q->url(), -cookie=>$cookie); exit;
 } else {
 ##   warn "resuming session ", $session->id(),". featureid: ". $session->param('feature_id');
 }
 
-($sid, $username) = &doSSO(); 
+if ($idp) {
+    ($sid, $username) = &doSSO(); 
 ### SSO killed our parameters, so load them again
-$session->load_param($q);
+    $session->load_param($q);
 #### ICICIC check for valid session, keep SAML and CGI sesssions synched
 
-$session->param('samlid', $sid);
-$session->param('username', $username);
+    $session->param('samlid', $sid);
+    $session->param('username', $username);
+}
 
 $embedded = $session->param('embedded');
 
@@ -169,9 +174,7 @@ sub printSearchForm {
     #&setVariables;
 
     &printStartPage;
-
     
-
     print &blastForm('#CCCCFF');
    
     print end_html;
@@ -362,6 +365,9 @@ sub runBlast {
 
      
     my  ($fh, $tmpfile) = tempfile(UNLINK => 1);
+
+    $program = shell_quote $program;
+
     unless ($program =~ /^blat/i) {
 
 	if ($filtering) {
@@ -381,9 +387,11 @@ sub runBlast {
 
     if ($program =~ /^(blat|tblat)/i) {
 
-	my $port = $port{$program}{$dataset};
+	my $port = shell_quote $port{$program}{$dataset};
 
-	my $host = $host{$program}{$dataset};
+	my $host = shell_quote $host{$program}{$dataset};
+
+	$seqtmp = shell_quote $seqtmp;
 
 	if ($program =~ /^blat/i) {
 
@@ -399,16 +407,16 @@ sub runBlast {
 
     }
     else {
-       
-       
+              
 	$program = $blastBinDir.$program;
-        $cmd = "$program -db $dataset -query $seqtmp  -out $blastOutputFile  $options > $tmpfile  2>&1";
- #	die $cmd;
-	
-   #	$cmd =" $program $dataset $seqtmp $options -cpus=2 -progress=20 >> $blastOutputFile 2>&1";
-   #    die "Erreur blast :$cmd";
-    }
+	$dataset = shell_quote $dataset;
+	$seqtmp = shell_quote $seqtmp;
+#	$options = shell_quote $options;
 
+        $cmd = "$program -db $dataset -query $seqtmp  -out $blastOutputFile  $options > $tmpfile  2>&1";
+  
+    }
+    print STDERR $cmd;
     my $err = system($cmd);
 
     if ($err) {
@@ -499,7 +507,12 @@ sub showResult {
     }
     ### buttons will only be displayed if feature_id is provided
     my $writer =  MyHTMLResultWriter->new($fid); 
-   
+    $writer->remote_database_url(($dbType{$dataset} eq 'dna') ? 'n' : 'p' , 
+				 $dbPrimaryURL{$dataset} ) 
+	if $dbPrimaryURL{$dataset};
+    $writer->remote_gbrowse_url( $dbGbrowseURL{$dataset} ) 
+	if $dbGbrowseURL{$dataset};
+    
     my $out = new Bio::SearchIO(-writer => $writer);
 
     
@@ -509,7 +522,8 @@ sub showResult {
 
 
     if ($@) {
-
+        print "An error occured converting the result.\n";
+	warn $@;
 	#die $@  # "<pre> error=$@</pre> ",p;
 
     }
@@ -611,9 +625,9 @@ FROM chado.feature where feature_id=?");
 	    $seqName = join(" ", ($displayName, $primaryTag, $description));
     } else {
 	### if we had a stored sequence and description, already, load it again:
-	$seqName = _get_param('seqname');
-	$residue = _get_param('sequence');
-	$filename = _get_param('filename');
+	$seqName = _get_param('seqname') || "";
+	$residue = _get_param('sequence') || "";
+	$filename = _get_param('filename') || "";
 
     }
 
@@ -624,7 +638,7 @@ FROM chado.feature where feature_id=?");
 		  -size=>60)
 	.p()."\n".
 	b(font({-color=>'red'},
-	       "NOTE: If the input sequence is less than 30 letters you should change the default Cutoff Score value to something less than 100 or you can miss matches.")).p.
+	       "NOTE: If the input sequence is less than 30/50 letters you should change the default paramter 'Task' to 'blastn-short' or 'blastp-short'  or you can miss matches.")).p.
 	       b("Upload Local TEXT File: FASTA, GCG, and RAW sequence formats are okay").br.
 	       "WORD Documents do not work unless saved as TEXT.".
 	       filefield(-name=>'filename',
@@ -639,10 +653,12 @@ FROM chado.feature where feature_id=?");
 				  b("Choose the Appropriate Search Program:").br.
 				  popup_menu(-name=>'program',
 					     -values=>\@program,
+					     -default=>_get_param('program'),
 					     -labels=>\%programLabel).p."\n".
 					     b("Choose a Sequence Database:").br.
 					     popup_menu(-name=>'database',
 							-values=>\@db,
+							-default=>_get_param('database'),
 							-labels=>\%dbLabel).br."\n".
 							submit(-value=>'Run BLAST').' or '.reset();
 
@@ -677,7 +693,7 @@ sub blastSearchOptions {
 	                 'dc-megablast'=>'Discontiguous megablast used to find more distant (e.g., interspecies) sequences',
 	                  'blastp-short' =>'BLASTP optimized for queries shorter than 30 residues');
 
-    my $taskDefault = "";   
+    my $taskDefault = _get_param('task');   
 
     
 
@@ -716,7 +732,7 @@ sub blastSearchOptions {
 
     return b('Options: ').
 	   'For descriptions of BLAST options and parameters, refer to the '. 
-	   a({-href=>$ncbiBlastHelp}, 
+	   a({-href=>$ncbiBlastHelp, -target=>'_blank'}, 
 	     'BLAST documentation at NCBI.').p.
 	   table({-bgcolor=>$optionBg,
 		  -cellspacing=>0},
@@ -769,10 +785,10 @@ sub blastSearchOptions {
 	#			  -default=>$alignNumDefault)).
 	#	    td(br)).
 		 Tr(th({-align=>'left'},
-		       'Others options :').
+		       'Other options :').
 		    td(textfield(-name=>'options_bis',
 			         -values=>"")).
-		    td('-options=value ')));
+		    td('-option=value, Advanced options, see BLAST documentation for details.')));
 
 #		 Tr(th({-align=>'left'},
 #		       'Sort output by :').
@@ -784,131 +800,105 @@ sub blastSearchOptions {
 
 ####################################################################
 sub setVariables {
+# read configuration via Config::IniFiles  
 ####################################################################
+    my $cfg = Config::IniFiles->new( -file => "$CONF_FILE", 
+				     -fallback => 'General' );
+  
+    ## tmpDir
+    $seqtmp =  $cfg->val( 'General', 'tmpDir' )."blastseq.$$.tmp";
+    $blastOutputFile =  $cfg->val( 'General', 'tmpDir' )."blast.$$.output";
+    ## imageDir   
+    $imageDir = $cfg->val( 'General', 'imageDir' );
+    # imageUrl/i) {
+    $imageUrl = $cfg->val( 'General', 'imageUrl' );
+    # databaseDir 
+    $datasetDir = $cfg->val( 'General', 'databaseDir' );
+#### ICICIC: using envirronment vars to control blast, shouldn't 
+#### be used, can give problems with remote system
+    $ENV{'BLASTDB'} =  $cfg->val( 'General', 'databaseDir' );    
+#### new db parser and add more options
+    my @DBs = $cfg->GroupMembers("DB");
 
-    open(CONF, "$CONF_FILE") ||
-	die "Can't open '$CONF_FILE' for reading:$!";
+    foreach (@DBs) {
+	my $db = $cfg->val($_,'name');
+	push(@db, $db);
+	$dbType{$db} = $cfg->val($_,'type');
+	$dbLabel{$db} = $cfg->val($_,'description');
+	$dbPrimaryURL{$db} =  $cfg->val($_,'primary_url');
+	$dbGbrowseURL{$db} =  $cfg->val($_,'gbrowse_url');
 
-    while(<CONF>) {
-	
-	if (/^\#/ || /^$/) { next; }
-
-	chomp;
-
-	my ($name, $value);
-	
-	if (/^([^\=]+) *= *(.+)$/) {
-
-	    $name = $1;
-
-	    $value = $2;
-	    $value =~ s/^ *//;
-	    $value =~ s/ *$//;
-
-	}
-
-	if ($name =~ /^tmpDir/i) {
-
-	    $seqtmp = $value."blastseq.$$.tmp";
-    
-	    $blastOutputFile = $value."blast.$$.output";
-
-	}
-	elsif ($name =~ /^imageDir/i) {
-
-	    $imageDir = $value;
-
-	}
-	elsif ($name =~ /^imageUrl/i) {
-
-	    $imageUrl = $value;
-
-	}
-	elsif ($name =~ /^databaseDir/i) {
-
-	    $datasetDir = $value;
-
-	    $ENV{'BLASTDB'} = $value;
-
-	}
-	elsif ($name =~ /^database/i) {
-
-	    my ($db, $type, $desc) = split(/=>/, $value);
-
-	    push(@db, $db);
-
-	    $dbType{$db} = $type;
-
-	    $dbLabel{$db} = $desc;
-
-        }
-	elsif ($name =~ /^blastBinDir/i) {
-
-	    $blastBinDir = $value;
-
-	}
-	elsif ($name =~ /^blatBinDir/i) {
-
-	    $blatBinDir = $value;
-
-	}
-	elsif ($name =~ /^port/i) {
-
-	    my ($port, $host, $program, $dataset) = split(/=>/, $value);
-
-	    $port{$program}{$dataset} = $port;
-
-	    $host{$program}{$dataset} = $host;
-
-	}
-	elsif ($name =~ /^program/i) {
-
-	    my ($program, $type, $desc) = split(/=>/, $value);
-
-	    push(@program, $program);
-
-	    $programType{$program} = $type;
-
-	    $programLabel{$program} = $desc;
-
-	}
-	elsif ($name =~ /^blastMAT/i) {
-
-	    $ENV{'BLASTMAT'} = $value;
-
-	}
-	elsif ($name =~ /^matrix/i) {
-
-	    push(@matrix, $value);
-
-	}
-	elsif ($name =~ /^blastFILTER/i) {
- 
-	    $ENV{'BLASTFILTER'} = $value;
-
-	}elsif ($name =~ /^idp/i) {
-	    $idp =  uri_escape($value);
-
-       	}elsif ($name =~ /^chadoDb(\s)*$/i) {
-	
-	    $chadoDb = $value;
-
-	}
-	elsif ($name =~ /^chadodbhost/) {
-	    $chadoDbHost = $value;
-
-	}elsif ($name =~ /^chadoDbUser/i) {
-	    
-	    $chadoDbUser = $value;
-	}elsif ($name =~ /chadoDbPass/i) {
-	    $chadoDbPass = $value;
-	}elsif ($name =~ /cssurl/i) {
-	    $cssurl = $value;
-	} else {
-	   # warn " unknown configuration option $name ";
-	}
     }
-    close(CONF) or die "error closing conf";
+#################################################
+
+    # blastBinDir/i) {
+    
+    $blastBinDir =  $cfg->val( 'General', 'blastBinDir' );
+    
+    
+    # blatBinDir/i) {
+    
+    $blatBinDir = $cfg->val( 'General', 'blatBinDir' );
+
+    ### the port is not used anywhere as far as I can see
+    ### possibly it was for remote blast, but we do not want 
+    ### to provide this option, remote blast must be implemented
+    ### via a queuing system
+    #elsif ($name =~ /^port/i) {
+
+    #    my ($port, $host, $program, $dataset) = split(/=>/, $value);
+    
+    #    $port{$program}{$dataset} = $port;
+
+    #   $host{$program}{$dataset} = $host;
+    
+    #}
+
+
+ my @progs = $cfg->GroupMembers("program");
+
+    foreach (@progs) {
+	my $program = $cfg->val($_,'name');
+	push(@program, $program);
+	$programType{$program}  = $cfg->val($_,'type');
+	$programLabel{$program} = $cfg->val($_,'description');
+    }
+
+
+
+
+
+
+#	}
+##	elsif ($name =~ /^blastMAT/i) {
+## ICICIC: this is probably not working with Blast+
+##	    $ENV{'BLASTMAT'} = $value;
+
+#	}
+#	elsif ($name =~ /^matrix/i) {
+
+#	    push(@matrix, $value);
+
+#	}
+
+#	elsif ($name =~ /^blastFILTER/i) {
+# this probably worked only with WU-blast, and we don't need it 
+#	    $ENV{'BLASTFILTER'} = $value;
+
+
+
+    # idp
+    $idp =  uri_escape($cfg->val( 'General', 'idp' ));
+    #chadoDb	
+    $chadoDb = $cfg->val( 'General', 'chadoDb' );
+    #chadoDbHost
+    $chadoDbHost = $cfg->val( 'General', 'chadoDbHost' );
+    #chadoDbUser	    
+    $chadoDbUser =  $cfg->val( 'General', 'chadoDbUser' );
+    # chadoDbPass/i) {
+    $chadoDbPass =  $cfg->val( 'General', 'chadoDbPass' );
+    #cssurl/i) {
+    $cssurl =  $cfg->val( 'General', 'cssurl' );;
 
     ############ 
     $program = _get_param('program');
@@ -969,7 +959,7 @@ sub checkTextfield {
 ####################################################################
     
     my $text  =$_[0];
-    if ($text=~ /;/  || $text=~/&/ ) {
+    if ($text && ($text=~ /[;&\0\|]/)) {
 
 	print  "Error in some textfield  ", p,
 	"Return to the form to adjust it";
@@ -1077,8 +1067,11 @@ sub setOptions {
     return if ($program =~ /blat/i);
 
    # $options = &blastOptions($program, length($sequence));
-    $options="";
-    my @params=(_get_param('sortop'),_get_param('ethr'),_get_param('sthr'),_get_param('output'),_get_param('wordlength'),_get_param('perc_ident'),_get_param('options_bis'));
+    $options = "";
+    my @params = (_get_param('sortop'),_get_param('ethr'),_get_param('sthr'),_get_param('output'),_get_param('wordlength'),_get_param('perc_ident'),_get_param('options_bis'));
+
+   
+
     foreach my $text( @params){
     
 	&checkTextfield($text); 
@@ -1086,24 +1079,24 @@ sub setOptions {
     }
     if (_get_param('sortop') && _get_param('sortop') ne "pvalue") { 
 
-	$options .= " -sort_by_"._get_param('sortop'); 
+	$options .= " -sort_by_". shell_quote (_get_param('sortop')); 
 
     }
     if (_get_param('ethr') && _get_param('ethr') ne "default") {
 
-	$options .= " -evalue="._get_param('ethr');
+	$options .= " -evalue=".shell_quote _get_param('ethr');
 
     }
     if (_get_param('sthr') && _get_param('sthr') ne "default") {
 
-	$options .= " -min_raw_gapped_score="._get_param('sthr')." ";
+	$options .= " -min_raw_gapped_score=".shell_quote _get_param('sthr')." ";
 
     }
  #   $options .= " B="._get_param('showal')." V="._get_param('showal');
 
     if (_get_param('output') ne "gapped") { $options .= " -ungapped"; }
     
-    if (_get_param('task') ne "" ){ $options.="-task=\""._get_param('task')."\"";}
+    if (_get_param('task') ne "" ){ $options.="-task=".shell_quote (_get_param('task'));}
 
  #   if ($program ne "blastn" && _get_param('matrix') ne "BLOSUM62") { 
 
@@ -1113,28 +1106,27 @@ sub setOptions {
 
     if (_get_param('wordlength') ne "default") { 
 
-	$options .= " -word_size="._get_param('wordlength');
+	$options .= " -word_size=".shell_quote _get_param('wordlength');
 
     }
     if (_get_param('perc_ident') ne "default" && (uc $program eq "BLASTN")) { 
 
-	$options .= " -perc_identity="._get_param('perc_ident');
+	$options .= " -perc_identity=".shell_quote _get_param('perc_ident');
 
     }
 
     if (_get_param('options_bis') ne "") {
     
-	$options.=" "._get_param('options_bis')." ";
+	$options.=" ".shell_quote _get_param('options_bis')." ";
     }
 
-	if (lc (_get_param('database')) =~ /^(nr|nt)/) {
-		$options .= " -remote "; # overload NCBI server instead of ours...
-    } 
-
-
+    #	if (lc (_get_param('database')) =~ /^(nr|nt)/) {
+    #		$options .= " -remote "; # overload NCBI server instead of ours...
+    #} 
 
 
 }
+
 
 #######################################################################
 sub blastOptions {
@@ -1278,7 +1270,7 @@ sub printStartPage {
     
 
 
-    if (_get_param('program') =~ /^(blat|tblatn)$/i) {
+    if (_get_param('program') && _get_param('program') =~ /^(blat|tblatn)$/i) {
 
  	print center('If there are no hits found using BLAT/TBLATN'.br.'the remainder of this page will be blank.'), hr({-width=>'20%'});
 
