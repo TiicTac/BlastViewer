@@ -3,7 +3,7 @@ We have attempted to update the code and fix issues where it was slightly broken
 
 We have also changed and added some features:
  
- - supports only Blast+ (not WU-blast any more) binaries and options (with "Task" parameter)
+ - supports only NCBI Blast+ (not WU-blast any more) binaries and options (icluding "Task" parameter)
  - added support for SAML authentication and logins via Net::SAML module
  - this change required to add full session management using CGI::Session
  - changed the configuration file parser to Config::IniFiles to allow for more refined blast database configuration, that also means the config files need to be changed, look at example.conf
@@ -16,19 +16,21 @@ We have also changed and added some features:
  - added a mechanism that can connect to a CHADO backend to retrieve sequence files
  - added a mechanism that can write a feature location entry derived from BLAST coordinates
    to CHADO for sequences retrieve from CHADO
- - script reads the local of the CSS file from the configuration
+ - script reads the location of the CSS file from the configuration
  - script can be called with embedd=1 parameter, then the script will not display greetings, title, and login and logout information
  - put the image generation in an eval
  - 'fixed' anchor links between graphics and textual result, works now but only for Nucleotide sequences  
 
 TODOs:
  - fix hyperlinks between graphics and textual result for non DNA
+ - remove all remnants of outdated WU-blast, in favor of open-source NCBI blast
  - the original 'synchroneous job handling' is naively implemented. 
    * result page can time out
    * no wait indicator
    * no job management, easy to overload server
    -> implement result page in Ajax with 'spinner'
    -> integrate one/many proper queueing system, e.g. OGE via DRMAA
+ - allow for more than a single query sequence
 
 
 ================================= Original README =============================================
