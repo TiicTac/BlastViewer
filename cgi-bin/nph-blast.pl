@@ -70,10 +70,10 @@ my $title = 'BLAST Search';
 my ($datasetDir, $seqtmp, $sequence, $program, $dataset, $options, 
     $filtering);
 
-my (@program, %programLabel, %programType, @db, %dbLabel, %dbType, %dbPrimaryURL, %dbGbrowseURL, @matrix);
+my (@program, %programLabel, %programType, @db, %dbLabel, %dbType, %dbPrimaryURL, %dbGbrowseURL, %dbDas, @matrix);
 
 my ($blastBinDir, $blatBinDir, $blastOutputFile, %port, %host);
-
+my $cfg; ## config object
 my ($imageDir, $imageUrl);
 
 
@@ -465,7 +465,6 @@ sub showGraph {
 ####################################################################
 sub showResult {
 ####################################################################
-
     print p, hr;
    # my $q = new CGI;
 
@@ -512,6 +511,15 @@ sub showResult {
 	if $dbPrimaryURL{$dataset};
     $writer->remote_gbrowse_url( $dbGbrowseURL{$dataset} ) 
 	if $dbGbrowseURL{$dataset};
+   # die "undefined DB connection" unless $chadoDb && $chadoDbHost &&  $chadoDbUser&& $chadoDbPass;
+my $das = Bio::DB::Das::Chado->new(
+	    -dsn  => "DBI:Pg:database=$chadoDb;host=$chadoDbHost",
+	    -user => $chadoDbUser,
+	    -pass => $chadoDbPass,
+	    -srcfeatureslice => 1,
+	    -tripal => 1
+    );
+    $writer->das_object( $das ) if ($dbDas{$dataset});
     
     my $out = new Bio::SearchIO(-writer => $writer);
 
@@ -524,7 +532,7 @@ sub showResult {
     if ($@) {
         print "An error occured converting the result.\n";
 	warn $@;
-	#die $@  # "<pre> error=$@</pre> ",p;
+	#die  " error=$@ ",p;
 
     }
 
@@ -802,14 +810,14 @@ sub blastSearchOptions {
 sub setVariables {
 # read configuration via Config::IniFiles  
 ####################################################################
-    my $cfg = Config::IniFiles->new( -file => "$CONF_FILE", 
+    $cfg = Config::IniFiles->new( -file => "$CONF_FILE", 
 				     -fallback => 'General' );
-  
+    die "invalid config file $CONF_FILE" unless ref $cfg;
     ## tmpDir
     $seqtmp =  $cfg->val( 'General', 'tmpDir' )."blastseq.$$.tmp";
     $blastOutputFile =  $cfg->val( 'General', 'tmpDir' )."blast.$$.output";
     ## imageDir   
-    $imageDir = $cfg->val( 'General', 'imageDir' );
+    $imageDir = $cfg->val( 'General', 'imageDir' ) or die "missing imageDir";
     # imageUrl/i) {
     $imageUrl = $cfg->val( 'General', 'imageUrl' );
     # databaseDir 
@@ -827,6 +835,7 @@ sub setVariables {
 	$dbLabel{$db} = $cfg->val($_,'description');
 	$dbPrimaryURL{$db} =  $cfg->val($_,'primary_url');
 	$dbGbrowseURL{$db} =  $cfg->val($_,'gbrowse_url');
+	$dbDas{$db} =  $cfg->val($_,'show_overlaps');
 
     }
 #################################################
@@ -890,13 +899,13 @@ sub setVariables {
     # idp
     $idp =  uri_escape($cfg->val( 'General', 'idp' ));
     #chadoDb	
-    $chadoDb = $cfg->val( 'General', 'chadoDb' );
+    $chadoDb = $cfg->val( 'General', 'chadodb' );
     #chadoDbHost
-    $chadoDbHost = $cfg->val( 'General', 'chadoDbHost' );
+    $chadoDbHost = $cfg->val( 'General', 'chadodbhost' );
     #chadoDbUser	    
-    $chadoDbUser =  $cfg->val( 'General', 'chadoDbUser' );
+    $chadoDbUser =  $cfg->val( 'General', 'chadodbuser' );
     # chadoDbPass/i) {
-    $chadoDbPass =  $cfg->val( 'General', 'chadoDbPass' );
+    $chadoDbPass =  $cfg->val( 'General', 'chadodbpass' );
     #cssurl/i) {
     $cssurl =  $cfg->val( 'General', 'cssurl' );;
 

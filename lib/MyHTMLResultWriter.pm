@@ -210,6 +210,17 @@ sub remote_gbrowse_url{
     return $self->{'remote_gbrowse_url'};
     
 }
+sub das_object{
+    my ($self, $value) = @_;
+
+    if( defined $value) {
+	$self->{'DAS_OBJECT'} = $value;
+    }
+    return $self->{'DAS_OBJECT'};
+    
+}
+
+
 
 =head2 to_string
 
@@ -343,11 +354,13 @@ sub to_string {
 		    $hspstr .= ", P = ".$hsp->pvalue;
 		}
 		$hspstr .= "<br>\n";
+	
 		$hspstr .= sprintf(" Identities = %d/%d (%d%%)",
 				   ( $hsp->frac_identical('total') * 
 				     $hsp->length('total')),
 				   $hsp->length('total'),
 				   $hsp->frac_identical('total') * 100);
+
 
 		if( $type eq 'PROTEIN' ) {
 		    $hspstr .= sprintf(", Positives = %d/%d (%d%%)",
@@ -403,7 +416,20 @@ sub to_string {
 		    $hspstr .= sprintf("<br>\nLinks = %s\n",$lnks);
 		}
 
-		$hspstr .= "</a><p>\n<pre>";
+		my $overlaps = "";
+		if (ref $self->das_object) {
+		    my $segi = $self->das_object->segment(-name=>$hit->accession, -start=>$hsp->start, -end=>$hsp->end);
+		    my @of = ($segi->overlapping_features());
+		    if (@of) {
+			$overlaps = "overlapping features:<br/><ul> ";
+			my @ofs = map {"<li>".$_->primary_tag()." ".$_->display_name()."</li>" } @of;
+			$overlaps .= (join "\n", @ofs)."</ul>";
+
+		    }
+
+		}
+
+		$hspstr .= "</a><p>$overlaps</p><p>\n<pre>";
 
 		my @hspvals = ( {'name' => 'Query:',
 				 'seq'  => $hsp->query_string,
