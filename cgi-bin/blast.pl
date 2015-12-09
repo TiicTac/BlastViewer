@@ -1,4 +1,5 @@
-#!/usr/bin/env perl
+#!/home/licebasetest/perl5/perlbrew/perls/perl-5.20.2/bin/perl
+#
 ########################################################################
 # Script name  :    nph-blast.pl
 #
@@ -15,7 +16,7 @@
 use strict;
 use warnings;
 use lib "../lib";
-#use diagnostics;
+use diagnostics;
 
 ########################################################################
 select(STDOUT); 
@@ -23,8 +24,8 @@ $| = 1;  # to prevent buffering problems
 ########################################################################
 
 use CGI;
-use CGI qw/:html :form -nph/;
-$CGI::POST_MAX=1024 * 100; #max 100k posts
+use CGI qw/:standard :html :form/;
+$CGI::POST_MAX=1024 * 500; #max 100k posts
 use CGI::Carp qw(fatalsToBrowser);
 use Bio::SearchIO;
 use MyHTMLResultWriter;
@@ -131,8 +132,13 @@ if ($new_session) {
 ##   warn "resuming session ", $session->id(),". featureid: ". $session->param('feature_id');
 }
 
+
+
+
 if ($idp) {
-    ($sid, $username) = &doSSO(); 
+	my $role = 'blast';
+
+    ($sid, $username) = &doSSO($role); 
 ### SSO killed our parameters, so load them again
     $session->load_param($q);
 #### ICICIC check for valid session, keep SAML and CGI sesssions synched
@@ -922,7 +928,6 @@ sub checkParameters {
     &checkDatabase;
     
     &checkSequence;
-
     &checkSeqLengthAndSvalue;
 
     &checkSeqLengthAndWordLength;
@@ -1261,7 +1266,7 @@ sub printStartPage {
        
 	if ($sid) {
 	    ## we are logged in!
-	    my $conf = "PATH=/home/licebase/zxid/var/zxid/&URL=$url";
+	    my $conf = "&URL=$url";
 	    my $cf = Net::SAML::new_conf_to_cf($conf);
 	    
 	    my $ses = Net::SAML::fetch_ses($cf, $sid);
@@ -1294,10 +1299,10 @@ sub doSSO {
 ####################################################################
     require Net::SAML;
 
+	my $role = shift;
 
 
-
-    my $conf = "PATH=/home/licebase/zxid/var/zxid/&URL=$url";
+    my $conf = "URL=$url";
     my $cf = Net::SAML::new_conf_to_cf($conf);
     my $qs = $ENV{'QUERY_STRING'};
     my $q = new CGI;
@@ -1315,18 +1320,37 @@ sub doSSO {
     my $op = substr($res, 0, 1);
     if ($op eq 'L') { die "$res" unless $redirecturl;
 		      print ($q->redirect($redirecturl)); 
-		      exit } # LOCATION (Redir) or CONTENT
+		      exit 0 } # LOCATION (Redir) or CONTENT
     if ($op eq 'C') { print ($res); exit }
     if ($op eq 'n') { exit; } # already handled
-    if ($op eq 'e') { #die "cannot choose IDP"; exit;
- } # not logged in
+    if ($op eq 'e') { die "an error occured during login $res" } # not logged in
     elsif ($op ne 'd') { die "Unknown Net::SAML::simple() res($res)"; }
     my ($sid) = $res =~ /^sesid: (.*)$/m;  # Extract a useful attribute from SSO output
     die "invalid session id" unless $sid;
-    my ($username) =   $res =~ /^displayName: (.*)$/m ;
-
+    my ($username) = $res =~ /^displayName:\s+(.*)$/m; 
+	($username) = $res =~ /^cn:\s+(.*)$/m unless $username; 
+	($username) = $res =~ /^eduPersonPrincipalName:\s+(.*)$/m unless $username;
+    my %roles = map {$_,1} ($res =~  m/^roles:\s+(.+)$/mg);
+	 _roleDeny("Role $role is required for login.\n Ask your adminisitrator ()  to get access.\n")
+         if  ($role and (! exists $roles{$role}));	
     return ($sid, $username);
 }
+
+
+sub _roleDeny {
+        my $message = shift;
+        print redirect("/blast_access_denied"); 
+        
+        exit 0;
+
+
+}
+
+
+
+
+
+
 
 ####################################################################
 sub renderLogOutButton {
