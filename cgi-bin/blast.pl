@@ -1,4 +1,4 @@
-#!/home/licebasetest/perl5/perlbrew/perls/perl-5.20.2/bin/perl
+#!/home/licebase/perl5/perlbrew/perls/perl-5.18.1/bin/perl
 #
 ########################################################################
 # Script name  :    nph-blast.pl
@@ -132,7 +132,7 @@ if ($new_session) {
 ##   warn "resuming session ", $session->id(),". featureid: ". $session->param('feature_id');
 }
 
-
+$idp = 0;
 
 
 if ($idp) {
@@ -158,6 +158,7 @@ if (_get_param('feature_id') && _get_param('start')
 elsif 
     ($q->param('retry') || (! $q->param('sequence') && (! $q->param('file')))) {
 	$session->clear('retry'); # user wants to try with different params
+    warn "sequence was empty" if ! $q->param('sequence');
 	&printSearchForm;   
 }
 else {
@@ -1266,7 +1267,7 @@ sub printStartPage {
        
 	if ($sid) {
 	    ## we are logged in!
-	    my $conf = "&URL=$url";
+	    my $conf = "PATH=/home/licebase/zxid/var/zxid/&URL=$url";
 	    my $cf = Net::SAML::new_conf_to_cf($conf);
 	    
 	    my $ses = Net::SAML::fetch_ses($cf, $sid);
@@ -1302,7 +1303,7 @@ sub doSSO {
 	my $role = shift;
 
 
-    my $conf = "URL=$url";
+    my $conf = "PATH=/home/licebase/zxid/var/zxid/&URL=$url";
     my $cf = Net::SAML::new_conf_to_cf($conf);
     my $qs = $ENV{'QUERY_STRING'};
     my $q = new CGI;

@@ -418,16 +418,19 @@ sub to_string {
 
 		my $overlaps = "";
 		if (ref $self->das_object) {
-		    my $segi = $self->das_object->segment(-name=>$hit->accession, -start=>$hsp->start, -end=>$hsp->end);
+		    my $segi = $self->das_object->segment(-name=>$hit->accession, -start=>$hsp->start('subject'), -end=>$hsp->end('subject'));
 		    my @of = ($segi->overlapping_features());
 		    if (@of) {
-			$overlaps = "overlapping features:<br/><ul> ";
-			my @ofs = map {"<li>".$_->primary_tag()." ".$_->display_name()."</li>" } @of;
-			$overlaps .= (join "\n", @ofs)."</ul>";
+			    $overlaps = "overlapping features:<br/><ul> ";
+			    my @ofs = map {"<li>".$_->primary_tag()." ".$_->display_name()."</li>" } @of;
+			    $overlaps .= (join "\n", @ofs)."</ul>";
+		    } else {
+			  $overlaps .= "no overlapping features";
+			}
 
-		    }
-
-		}
+		} else {
+			# $overlaps .= "no das object";
+	    }
 
 		$hspstr .= "</a><p>$overlaps</p><p>\n<pre>";
 
