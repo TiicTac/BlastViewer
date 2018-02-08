@@ -158,7 +158,7 @@ if (_get_param('feature_id') && _get_param('start')
 elsif 
     ($q->param('retry') || (! $q->param('sequence') && (! $q->param('file')))) {
 	$session->clear('retry'); # user wants to try with different params
-    warn "sequence was empty" if ! $q->param('sequence');
+    #warn "sequence was empty" if ! $q->param('sequence');
 	&printSearchForm;   
 }
 else {

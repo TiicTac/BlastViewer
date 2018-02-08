@@ -331,7 +331,7 @@ sub to_string {
 	    # failover to first HSP if the data does not contain a 
 	    # bitscore/significance value for the Hit (NCBI XML data for one)
 
-	    $str .= sprintf('<tr><td>%s %s</td><td>%s</td><td><a href="#%s">%.2g</a></td></tr>'."\n",
+	    $str .= sprintf('<tr><td>%s %s</td><td>%s</td><td><a href="#%s" target="_new">%.2g</a></td></tr>'."\n",
 			    $url_desc, $descsub, 
 			    ($hit->bits ? $hit->bits : 
 			     (defined $hsps[0] ? $hsps[0]->bits : ' ')),
@@ -415,22 +415,20 @@ sub to_string {
 		   $hsp->can('links') && defined(my $lnks = $hsp->links) ) {
 		    $hspstr .= sprintf("<br>\nLinks = %s\n",$lnks);
 		}
-
-		my $overlaps = "";
+		my $overlaps = "<hr/>";
 		if (ref $self->das_object) {
-		    my $segi = $self->das_object->segment(-name=>$hit->accession, -start=>$hsp->start('subject'), -end=>$hsp->end('subject'));
+		    my $segi = $self->das_object->segment(-name=>$hit->accession, -start=>$hsp->start, -end=>$hsp->end);
 		    my @of = ($segi->overlapping_features());
 		    if (@of) {
-			    $overlaps = "overlapping features:<br/><ul> ";
-			    my @ofs = map {"<li>".$_->primary_tag()." ".$_->display_name()."</li>" } @of;
-			    $overlaps .= (join "\n", @ofs)."</ul>";
-		    } else {
-			  $overlaps .= "no overlapping features";
-			}
+			$overlaps = "overlapping features:<br/><ul> ";
+			my @ofs = map {"<li>".$_->primary_tag()." ".$_->display_name()."</li>" } @of;
+			$overlaps .= (join "\n", @ofs)."</ul>";
 
-		} else {
-			# $overlaps .= "no das object";
-	    }
+		    } else {
+	 			$overlaps = "0 overlaps found";
+            }
+
+		}
 
 		$hspstr .= "</a><p>$overlaps</p><p>\n<pre>";
 
@@ -616,7 +614,7 @@ sub default_hit_link_desc {
     my ($gi,$acc) = &{$self->id_parser}($hit->name);
 
     my $url = length($self->remote_database_url($type)) > 0 ? 
-              sprintf('<a href="%s">%s</a>',
+              sprintf('<a href="%s" target="_new">%s</a>',
                       sprintf($self->remote_database_url($type),$gi || $acc), 
                       $hit->name()) :  $hit->name();
 
@@ -714,7 +712,7 @@ sub default_hit_desc_line {
             $acc =~ s/(\S+)\s+$/$1/;
             $url =
             length($self->remote_database_url($type)) > 0 ? 
-              sprintf('<a href="%s">%s</a> %s',
+              sprintf('<a href="%s" target="_new">%s</a> %s',
                       sprintf($self->remote_database_url($type),
                       $gi || $acc || $db), 
                       $name, $sec) :  $sec;
